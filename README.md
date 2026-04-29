@@ -7,7 +7,7 @@
 2) detects loci of selection in the copy-number data and 
 3) can assign loci of selection to copy-number data
 
-See the [accompanying BioRxiv preprint](www.biorxiv.org/content/10.64898/2026.03.01.708809v1) for more information.
+See the [accompanying BioRxiv preprint](https://www.biorxiv.org/content/10.64898/2026.03.01.708809v1) for more information.
 
 ## 0. Installation
 
@@ -423,7 +423,7 @@ See also the example notebooks for how to use the API.
 
 ## 9. Citation
 
-If you use SPICE in your research, please cite the [accompanying BioRxiv preprint](www.biorxiv.org/content/10.64898/2026.03.01.708809v1):
+If you use SPICE in your research, please cite the [accompanying BioRxiv preprint](https://www.biorxiv.org/content/10.64898/2026.03.01.708809v1):
 
 > **Deciphering selection patterns of somatic copy-number events** Tom L. Kaufmann, Adam Streck, Florian Markowetz, Peter Van Loo, Roland F. Schwarz. bioRxiv 2026; doi: https://doi.org/10.64898/2026.03.01.708809
 
