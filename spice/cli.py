@@ -12,25 +12,6 @@ import spice
 from spice.utils import save_pickle
 
 
-def get_version():
-    """Get installed package version, with setup.py fallback for editable installs."""
-    try:
-        from importlib.metadata import version
-    except ImportError:
-        try:
-            from importlib_metadata import version
-        except ImportError:
-            version = None
-
-    if version is not None:
-        try:
-            return version('scna-spice')
-        except Exception:
-            pass
-
-    return 'unknown'
-
-
 def main_event_inference(args):
     """Run event inference pipeline."""
     # Handle 'all' or empty arguments, and expand trailing + syntax (e.g., split+)
@@ -773,14 +754,7 @@ def main():
         description='SPICE: Selection Patterns In somatic Copy-number Events',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    
-    # Add --version flag at the top level
-    parser.add_argument(
-        '--version',
-        action='version',
-        version=f'%(prog)s {get_version()}'
-    )
-    
+        
     parser.epilog = """
 Examples:
   # Event inference
