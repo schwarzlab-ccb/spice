@@ -157,7 +157,7 @@ def create_knn_train_data(output_file, knn_train_data_ext=None, full_paths_singl
     save_pickle(knn_train_data, output_file)
 
 
-def solve_with_knn_wrapper(cur_id, chrom_segments_file, full_paths_multiple_solutions_dirs, is_wgd, knn_train_data=None,
+def solve_with_knn_wrapper(cur_id, chrom_segments_file, full_paths_multiple_solutions_dirs, is_wgd,
                            k=250, single_width_bin=True, perform_loh_checks=False,
                            save_all_scores=None, output_file=None):
     
@@ -202,7 +202,7 @@ def solve_with_knn_wrapper(cur_id, chrom_segments_file, full_paths_multiple_solu
 
 
 def solve_with_mcmc_wrapper(
-        chrom_file, chrom_segments_file, sv_data_file, is_wgd, knn_train_data=None, k=250, wgd_split=True,
+        chrom_file, chrom_segments_file, sv_data_file, is_wgd, k=250, wgd_split=True,
         output_file=None, sv_matching_threshold=10, n_iterations=None, n_iteration_scale=100, perform_loh_checks=False,
         min_T=1, max_T=-6, swap_event_based_on_score=True, check_all_loh_solutions=False, total_cn=False,
         verbose=False, save_all_scores=None, log_progress=False, show_progress=False, fail_on_empty=True,
