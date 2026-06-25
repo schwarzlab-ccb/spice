@@ -86,7 +86,7 @@ def mcmc_event_selection(
     if not has_loh:
         perform_loh_checks = False
     starts, ends = get_starts_and_ends(cn_profile, prior_profile=None, loh_adjust=True, total_cn=total_cn)
-    n_events = len(starts)
+    n_events = chrom_data.n_events
     if len(starts) == 0:
         return None
     
@@ -138,14 +138,14 @@ def mcmc_event_selection(
         sv_selected_score = 0
         sv_selected_events = []
         sv_selected_events_set = []
-    log_debug(logger, f'{n_sv_overlaps} SV overlaps for a total of {n_events} events. {len(starts)} events remaining')
+        log_debug(logger, f'{n_sv_overlaps} SV overlaps for a total of {n_events} events. {len(starts)} events remaining')
 
     # if the chrom is completely solved by SVs
-    if n_sv_overlaps > 0 and len(starts) <= 1:
+    if n_sv_overlaps > 0 and n_events <= 1:
         n_iterations = 0
         is_accepted_iteration.append(0)
         all_sv_overlaps.append(n_sv_overlaps)
-        if len(starts) == 1:
+        if n_events == 1:
             sv_selected_events = np.concatenate([sv_selected_events, np.array([[starts[0], ends[0]]])], axis=0)
         overall_best_events = sv_selected_events
 
@@ -442,8 +442,12 @@ def _create_mcmc_proposal_wgd(cur_events, iteration, cn_profile, swap_event_base
             new_events = proposal_wgd_simple_swap(cur_events, swap_event_based_on_score, event_distances)
             cur_transition = 'simple_swap'
 
+        n += 1
         if n > 1_000:
-            raise ValueError(f'No valid proposal found for current events: {cur_events}')
+            # this can only happen on the very first proposal as the subsequent proposals are based on the previous ones
+            log_debug(logger, f'No valid proposal found after 1000 tries for current events: {cur_events}')
+            new_events = get_wgd_single_solution(cn_profile, total_cn=total_cn)
+            break
 
     logger.debug(f'Transition: {cur_transition}')
     return new_events
