@@ -3,7 +3,7 @@ from pathlib import Path
 
 setup(
     name='scna-spice',
-    version='0.1.0',
+    version='0.1.1',
     author='Tom L Kaufmann',
     description='SPICE: Selection Patterns In somatic Copy-number Events',
     author_email='tkau93@gmail.com, marina.55kovic@gmail.com, roland.f.schwarz@gmail.com',
