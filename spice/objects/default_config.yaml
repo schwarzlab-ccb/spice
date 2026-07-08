@@ -64,7 +64,7 @@ loci_detection:
   filter_N_iterations_optim: 100 # Number of iterations for filter optimization
   final_limiting_N_iterations_optim: 100 # Number of iterations for final limiting optimization
   N_bootstrap_for_widths: 10 # How many bootstrap iterations are used for inferring locus widths (needs to be <= N_bootstrap)
-  th_locus_prominence: 1 # Threshold for locus prominence filtering
+  th_locus_prominence: 10 # Threshold for locus prominence filtering
   # Loci assignment
   loci_assignment_N_iterations: 250 # Number of iterations for loci assignment optimization
   loci_assignment_within_ci_N_iterations: 100 # Number of iterations for within ci filtering
@@ -77,5 +77,5 @@ loci_detection:
   # Event preprocessing parameters
   remove_plateaus: True # Remove events overlapping copy-number plateaus
   remove_chrY: True # Remove chrY events from analysis
-  drop_duplicates: True # Remove duplicate event entries
+  drop_duplicates: False # Remove duplicate event entries
   use_observed_centromeres: True # Use empirically observed centromere positions
