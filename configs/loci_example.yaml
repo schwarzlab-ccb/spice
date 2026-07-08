@@ -7,6 +7,7 @@ directories:
   base_dir: '.'
 
 loci_detection:
-  N_loci: 100
+  N_loci: 10
+  th_locus_prominence: 1 # Needs to be this low because we do not have enough data
 
 note: 'Example configuration for loci detection and assignment'
