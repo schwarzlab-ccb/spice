@@ -497,7 +497,7 @@ def assign_p_values(
                 logger.info(f"Calculating p-value distribution for {cur_chrom} ({cur_type})")
                 p_value_results = p_value_using_resim(
                     cur_chrom=cur_chrom,
-                    cur_up_down=cur_type,
+                    cur_up_down='up' if cur_type == 'OG' else 'down',
                     N_test=N_random,
                     data_per_length_scale=data_per_length_scale[cur_chrom],
                     n_iterations_optim=n_iterations_optim,

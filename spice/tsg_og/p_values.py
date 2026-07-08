@@ -39,6 +39,7 @@ def p_value_using_resim(
         N_test: Number of random simulations to perform
         n_iterations_optim: Number of optimization iterations (default: 1000)
     """
+    assert cur_up_down in ['up', 'down'], "cur_up_down must be either 'up' or 'down'"
     
     logging.getLogger('tsg_og_detection').setLevel(logging.WARNING)
 
