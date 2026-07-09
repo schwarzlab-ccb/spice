@@ -1119,6 +1119,10 @@ def build_final_loci_df(
     Build loci_df, add scoring/summary columns, and compute added_events per locus.
     Returns loci_df and per-chrom locus width stds.
     """
+    if sum(len(x) for x in all_loci_widths.values()) == 0:
+        logger.warning('No loci to build a final loci dataframe from; returning an empty dataframe')
+        return pd.DataFrame(columns=['chrom'])
+
     loci_df = create_loci_df(all_selection_points, all_loci_widths, nr_stds_widths=2,
                                 min_widths_is_small_kernel=True)
     
@@ -1170,57 +1174,75 @@ def full_filter_by_p_values(
         data_per_length_scale=all_data_per_length_scale,
         overwrite=overwrite,
     )
-    logger.info(f'Out of {len(loci_df)} loci, {len(loci_df.query("p_value < @p_value_threshold"))} ({len(loci_df.query("p_value < @p_value_threshold"))/len(loci_df):.2%}%) are significant at p < {p_value_threshold} ')
 
-    filtered_selection_points = {}
-    filtered_loci_widths = {}
-    final_p_values = []
-    for cur_chrom in loci_df['chrom'].unique():
-        cur_sp = [list(x) for x in copy_list_of_selection_points(all_selection_points[cur_chrom])]
-        cur_loci = loci_df.query('chrom == @cur_chrom')
-        is_significant = cur_loci.sort_values('rank_on_chrom').eval('p_value < @p_value_threshold').values
-        filtered_selection_points[cur_chrom] = [
-            [x for i, x in enumerate(ls_x) if is_significant[i]] for ls_x in cur_sp]
-        filtered_loci_widths[cur_chrom] = [
-            x for i, x in enumerate(all_loci_widths[cur_chrom]) if is_significant[i]]
-        final_p_values.append(cur_loci.sort_values('rank_on_chrom').loc[is_significant]['p_value'].values)
-    final_p_values = np.concatenate(final_p_values)
-    assert np.all(final_p_values < p_value_threshold), f'{np.sum(final_p_values >= p_value_threshold)} loci with p >= {p_value_threshold} after filtering'
-    assert len(final_p_values) == sum(len(x) for x in filtered_loci_widths.values()), (
-        f'Length mismatch between final_p_values ({len(final_p_values)}) and filtered loci '
-        f'({sum(len(x) for x in filtered_loci_widths.values())})'
-    )
     if len(loci_df) == 0:
-        logger.warning('No loci passed the p-value filtering!')
+        # Empty bucket: no candidate loci at all (e.g. no events of this type/size on this chromosome)
+        logger.warning('No candidate loci found; returning an empty locus set')
+        return {}, {}, np.array([])
+
+    n_significant = len(loci_df.query("p_value < @p_value_threshold"))
+    logger.info(f'Out of {len(loci_df)} loci, {n_significant} ({n_significant/len(loci_df):.2%}%) are significant at p < {p_value_threshold} ')
+
+    try:
+        filtered_selection_points = {}
+        filtered_loci_widths = {}
+        final_p_values = []
+        for cur_chrom in loci_df['chrom'].unique():
+            cur_sp = [list(x) for x in copy_list_of_selection_points(all_selection_points[cur_chrom])]
+            cur_loci = loci_df.query('chrom == @cur_chrom')
+            is_significant = cur_loci.sort_values('rank_on_chrom').eval('p_value < @p_value_threshold').values
+            filtered_selection_points[cur_chrom] = [
+                [x for i, x in enumerate(ls_x) if is_significant[i]] for ls_x in cur_sp]
+            filtered_loci_widths[cur_chrom] = [
+                x for i, x in enumerate(all_loci_widths[cur_chrom]) if is_significant[i]]
+            final_p_values.append(cur_loci.sort_values('rank_on_chrom').loc[is_significant]['p_value'].values)
+        final_p_values = np.concatenate(final_p_values) if final_p_values else np.array([])
+        assert np.all(final_p_values < p_value_threshold), f'{np.sum(final_p_values >= p_value_threshold)} loci with p >= {p_value_threshold} after filtering'
+        assert len(final_p_values) == sum(len(x) for x in filtered_loci_widths.values()), (
+            f'Length mismatch between final_p_values ({len(final_p_values)}) and filtered loci '
+            f'({sum(len(x) for x in filtered_loci_widths.values())})'
+        )
+        if len(final_p_values) == 0:
+            # Empty bucket: loci existed but none survived the p-value cut
+            logger.warning('No loci passed the p-value filtering!')
+            return filtered_selection_points, filtered_loci_widths, final_p_values
+
+        logger.info('Optimizing selection points after p-value filtering')
+        for cur_chrom in loci_df['chrom'].unique():
+            cur_sp = filtered_selection_points[cur_chrom]
+            if len(cur_sp[0]) == 0:
+                # Empty bucket for this chromosome specifically: nothing left to optimize
+                log_debug(logger, f'No significant loci left on {cur_chrom} after filtering; skipping optimization')
+                continue
+            log_debug(logger, f'Optimizing selection points on {cur_chrom}')
+            allowed_fitness_change = np.stack([[x[0].fitness != 0 for x in y] for y in cur_sp])
+            up_down_order = np.array([any([cur_sp[j][cluster_j][0].fitness > 0 for j in range(0, 8, 2)])
+                                for cluster_j in range(len(cur_sp[0]))])
+            cur_conv = convolution_simulation_per_ls(cur_chrom, all_data_per_length_scale[cur_chrom], cur_sp)
+            cur_mse = calc_mse_loss(all_data_per_length_scale[cur_chrom], cur_conv)
+            cur_sp_optim, _, _ = _optimize_selection_points(
+                post_p_value_N_iterations,
+                list(zip(*cur_sp)),
+                all_data_per_length_scale[cur_chrom],
+                cur_chrom,
+                best_loss=cur_mse,
+                show_progress=False,
+                N_iterations_base=0,
+                max_fitness=[1.1*max([y[0].fitness for y in x]) for x in cur_sp],
+                loci_to_optimize=None,
+                final_iteration=False,
+                allowed_fitness_change=allowed_fitness_change,
+                max_deviation=0.00001,
+                allow_pos_change=False,
+                up_down_order=up_down_order,
+                blocked_distance_th=2e5
+            )
+            filtered_selection_points[cur_chrom] = list(zip(*cur_sp_optim))
+
         return filtered_selection_points, filtered_loci_widths, final_p_values
 
-    
-    logger.info('Optimizing selection points after p-value filtering')
-    for cur_chrom in loci_df['chrom'].unique():
-        log_debug(logger, f'Optimizing selection points on {cur_chrom}')
-        cur_sp = filtered_selection_points[cur_chrom]
-        allowed_fitness_change = np.stack([[x[0].fitness != 0 for x in y] for y in cur_sp])
-        up_down_order = np.array([any([cur_sp[j][cluster_j][0].fitness > 0 for j in range(0, 8, 2)])
-                            for cluster_j in range(len(cur_sp[0]))])
-        cur_conv = convolution_simulation_per_ls(cur_chrom, all_data_per_length_scale[cur_chrom], cur_sp)
-        cur_mse = calc_mse_loss(all_data_per_length_scale[cur_chrom], cur_conv)
-        cur_sp_optim, _, _ = _optimize_selection_points(
-            post_p_value_N_iterations, 
-            list(zip(*cur_sp)), 
-            all_data_per_length_scale[cur_chrom], 
-            cur_chrom,
-            best_loss=cur_mse, 
-            show_progress=False, 
-            N_iterations_base=0, 
-            max_fitness=[1.1*max([y[0].fitness for y in x]) for x in cur_sp],
-            loci_to_optimize=None,
-            final_iteration=False, 
-            allowed_fitness_change=allowed_fitness_change,
-            max_deviation=0.00001, 
-            allow_pos_change=False,
-            up_down_order=up_down_order,
-            blocked_distance_th=2e5
-        )
-        filtered_selection_points[cur_chrom] = list(zip(*cur_sp_optim))
-
-    return filtered_selection_points, filtered_loci_widths, final_p_values
+    except (ZeroDivisionError, IndexError, ValueError, KeyError, AssertionError) as e:
+        # Catch-all for empty/mis-sized buckets we didn't anticipate above (e.g. mask/list
+        # misalignment) - treat as "nothing significant" rather than aborting the whole run.
+        logger.warning(f'p-value filtering failed ({type(e).__name__}: {e}); treating as an empty bucket and returning no loci')
+        return {}, {}, np.array([])
