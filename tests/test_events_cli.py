@@ -61,7 +61,6 @@ def temp_workspace():
                 'knn_k': 250,
                 'sv_matching_threshold': 10,
                 'time_limit_all_solutions': 60,
-                'time_limit_loh_filters': 60,
                 'all_loh_solutions': False,
                 'use_cache': True,
                 'logging_level': 'INFO',
@@ -101,6 +100,12 @@ class TestCLIBasic:
         assert 'event_inference' in result.stdout
         assert 'plotting' in result.stdout
         assert 'loci_detection' in result.stdout
+        # Regression guard: the epilog's plotting examples must use the real,
+        # registered flag names, not the stale --plot-sample/--plot-id.
+        assert '--plot-sample' not in result.stdout
+        assert '--plot-id' not in result.stdout
+        assert '--plot-events-per-sample' in result.stdout
+        assert '--plot-events-per-id' in result.stdout
     
     def test_spice_no_mode_fails(self):
         """Test that spice without mode argument fails."""
@@ -165,7 +170,7 @@ class TestCLIBasic:
     def test_plotting_config_required(self):
         """Test that --config is required for plotting."""
         result = subprocess.run(
-            ['spice', 'plotting', '--plot-sample', 'sample1'],
+            ['spice', 'plotting', '--plot-events-per-sample', 'sample1'],
             capture_output=True,
             text=True
         )
@@ -301,30 +306,34 @@ class TestCLIBasic:
         assert result.returncode != 0
     
     def test_plotting_plot_sample_accepted(self, temp_workspace):
-        """Test that --plot-sample is accepted for plotting mode."""
+        """Test that --plot-events-per-sample is accepted for plotting mode."""
         tmpdir, config_path = temp_workspace
-        
+
         result = subprocess.run(
-            ['spice', 'plotting', '--config', config_path, '--plot-sample', 'sample1'],
+            ['spice', 'plotting', '--config', config_path, '--plot-events-per-sample', 'sample1'],
             capture_output=True,
             text=True,
             timeout=10
         )
-        # Should accept argument parsing even if execution fails
-        assert 'plot-sample' not in result.stderr or result.returncode == 0
-    
+        # Argument parsing should succeed even if plotting execution fails later
+        # (e.g. because event_inference hasn't been run yet in this workspace).
+        assert 'unrecognized arguments' not in result.stderr
+        assert 'one of the arguments' not in result.stderr
+
     def test_plotting_plot_id_accepted(self, temp_workspace):
-        """Test that --plot-id is accepted for plotting mode."""
+        """Test that --plot-events-per-id is accepted for plotting mode."""
         tmpdir, config_path = temp_workspace
-        
+
         result = subprocess.run(
-            ['spice', 'plotting', '--config', config_path, '--plot-id', 'sample:chr1:cn_a'],
+            ['spice', 'plotting', '--config', config_path, '--plot-events-per-id', 'sample:chr1:cn_a'],
             capture_output=True,
             text=True,
             timeout=10
         )
-        # Should accept argument parsing even if execution fails
-        assert 'plot-id' not in result.stderr or result.returncode == 0
+        # Argument parsing should succeed even if plotting execution fails later
+        # (e.g. because event_inference hasn't been run yet in this workspace).
+        assert 'unrecognized arguments' not in result.stderr
+        assert 'one of the arguments' not in result.stderr
 
 
 class TestEventInferenceExecution:
