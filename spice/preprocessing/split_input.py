@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import fstlib
 
-from spice.utils import save_pickle, open_pickle
+from spice.utils import save_pickle, add_filename_suffix
 
 # Use importlib.resources for accessing package data (works with installed packages)
 if sys.version_info >= (3, 9):
@@ -116,8 +116,9 @@ def _prepare_split_inputs(name, keep_old=False, selected_ids=None):
         data, cn_columns=['cn'], start_end_must_overlap=False)
     data['sample_id'] = data['sample_id'].str.replace('_cn_a', '').str.replace('_cn_b', '')
 
-    log_debug(logger, f'Saving split input TSV to {copynumber_file.replace(".tsv", "_split.tsv")}')
-    data.to_csv(copynumber_file.replace('.tsv', '_split.tsv'), sep='\t', index=False)
+    split_copynumber_file = add_filename_suffix(copynumber_file, '_split')
+    log_debug(logger, f'Saving split input TSV to {split_copynumber_file}')
+    data.to_csv(split_copynumber_file, sep='\t', index=False)
 
     # Load lookup tables from package resources
     if total_cn:
@@ -223,6 +224,9 @@ def _process_group(context, key, chrom_segments):
     if cur_sv_data is not None and len(cur_sv_data) > 0:
         sv_threshold = config['params']['sv_matching_threshold']
         relevant_svs = cur_sv_data.query('svclass == "DUP" or svclass == "DEL"')
+        sv_size_filter = config['params'].get('sv_size_filter', 0)
+        if sv_size_filter:
+            relevant_svs = relevant_svs.query('(end - start) >= @sv_size_filter')
         if len(relevant_svs) > 0:
             breakpoints = np.unique(np.concatenate([
                 chrom_segments['start'].values, chrom_segments['end'].values]))

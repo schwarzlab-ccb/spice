@@ -21,16 +21,13 @@ params:
   use_cache: True
   sv_size_filter: 1000
   sv_matching_threshold: 10
-  sv_filter_dup_del: True
   knn_k: 250
   all_loh_solutions: False
-  timing_solution_threshold: 0.316 # 1/10**(1/2)
   mcmc_max_T: -6
   mcmc_min_T: 1
   mcmc_n_iterations_scale: 200
   # Time limits (in seconds, per chromosome)
   time_limit_all_solutions: None
-  time_limit_loh_filters: None
   time_limit_mcmc: None
   skip_loh_check_for_large_chroms: True # Whether to skip LOH checks for large chromosomes when MCMC solving times out (can lead to inaccurate results, but might be necessary for large chromosomes)
   # Cluster parameters for Snakemake

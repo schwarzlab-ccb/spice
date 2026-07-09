@@ -266,12 +266,12 @@ def get_or_infer_wgd_status(data, total_cn=False):
 def get_or_infer_xy_status(data):
     """Return XY (male) status per sample either from file or by inference.
 
-    - If `input_files.xy_samples` is provided and non-empty, load it (expects a TSV
+    - If `input_files.xy_status` is provided and non-empty, load it (expects a TSV
       with index as sample_id and a boolean `xy` column where True indicates male/XY).
     - Otherwise, infer: a sample is XY if any segments exist on chromosome 'chrY'.
     - Logs a summary of counts via the module's logger.
     """
-    xy_file = config['input_files'].get('xy_samples', None)
+    xy_file = config['input_files'].get('xy_status', None)
     if xy_file is not None and xy_file != 'None' and xy_file != '':
         xy_status = pd.read_csv(xy_file, sep='\t', index_col=0, dtype={'xy': bool})['xy']
         missing_samples = set(data['sample_id'].unique()) - set(xy_status.index)

@@ -19,11 +19,28 @@ def chrom_id_from_id(cur_id):
     return re.sub(r':cn_[ab](:\d+$)?', '', cur_id)
 
 
+def add_filename_suffix(path, suffix):
+    """Insert `suffix` before the file extension.
+
+    Uses os.path.splitext instead of a naive '.tsv' substring replace, so it
+    works correctly regardless of the input file's extension (or lack of one).
+    E.g. add_filename_suffix('a/b.tsv', '_split') -> 'a/b_split.tsv'
+         add_filename_suffix('a/b.csv', '_split') -> 'a/b_split.csv'
+         add_filename_suffix('a/b', '_split') -> 'a/b_split.tsv'
+    """
+    root, ext = os.path.splitext(path)
+    return f"{root}{suffix}{ext or '.tsv'}"
+
+
 def get_sister_allele(cur_id):
-    if "cn_a" in cur_id:
-        return cur_id.replace("cn_a", "cn_b")
-    else:
-        return cur_id.replace("cn_b", "cn_a")
+    match = re.search(r':cn_([ab])(:\d+)?$', cur_id)
+    if match is None:
+        raise ValueError(
+            f"Cannot determine sister allele for id '{cur_id}': expected an id ending in "
+            "':cn_a' or ':cn_b' (optionally followed by ':<int>').")
+    sister = 'b' if match.group(1) == 'a' else 'a'
+    start, end = match.span(1)
+    return cur_id[:start] + sister + cur_id[end:]
 
 class CALC_NEW_SKIP():
     def __repr__(self):
@@ -36,9 +53,9 @@ class CALC_NEW:
     def __init__(self, filename=None, force_new=False, verbose=True):
         self.filename = filename
         self.force_new = force_new
-        self.logger = logging.getLogger('CALC_NEW')
+        self.logger = get_logger('CALC_NEW')
         if verbose:
-            self.logger.setLevel(logging.INFO)
+            self.logger.setLevel(logging.DEBUG)
         else:
             self.logger.setLevel(logging.WARNING)
 
@@ -61,7 +78,7 @@ class CALC_NEW:
                 force_new = self.force_new
             if 'calc_new_verbose' in kwargs:
                 if kwargs['calc_new_verbose']:
-                    self.logger.setLevel(logging.INFO)
+                    self.logger.setLevel(logging.DEBUG)
                 else:
                     self.logger.setLevel(logging.WARNING)
                 del kwargs['calc_new_verbose']
@@ -93,7 +110,7 @@ class CALC_NEW:
                         self.result = None
                     else:
                         log_debug(self.logger, f"Save data to {filename}")
-                        if not os.path.exists(os.path.dirname(filename)):
+                        if os.path.dirname(filename) and not os.path.exists(os.path.dirname(filename)):
                             os.makedirs(os.path.dirname(filename), exist_ok=True)
                         with open(filename, 'wb') as f:
                             pickle.dump(self.result, f)
@@ -134,7 +151,7 @@ def open_pickle(filename, n_elements=None, fail_if_nonexisting=True,
 
 def save_pickle(obj, filename, create_dir_if_not_exists=True):
 
-    if create_dir_if_not_exists and not os.path.exists(os.path.dirname(filename)):
+    if create_dir_if_not_exists and os.path.dirname(filename) and not os.path.exists(os.path.dirname(filename)):
         os.makedirs(os.path.dirname(filename), exist_ok=True)
 
     with open(filename, 'wb') as f:
@@ -271,15 +288,13 @@ def create_full_paths_events_df(cur_full_paths, chrom_segments):
     return cur_events_df
 
 
- 
-
  # TODO: move
 def get_diffs_from_events_df(cur_id, events_df, supported_chains_only=False):
     cur_events = events_df.query("id == @cur_id")
 
     # needs to be separate query in case cur_events do not have supported_chain colum
     if supported_chains_only:
-        cur_events = events_df.query("supported_chain")
+        cur_events = cur_events.query("supported_chain")
     if cur_events.empty:
         print("no events found")
         return None

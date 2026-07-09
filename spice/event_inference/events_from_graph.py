@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 
 
 def full_paths_from_graph_with_sv(cur_id, is_wgd, sv_data, chrom_segments, chrom,
-                                  time_limit=60, path_limit=None, time_limit_loh_filters=60, total_cn=False,
+                                  time_limit=60, path_limit=None, time_limit_loh_filters=None, total_cn=False,
                                   sv_matching_threshold=sv_matching_threshold, use_cache=True,
                                   skip_loh_checks=False, all_loh_solutions=True, **kwargs):
     cur_sample, cur_chrom, cur_allele = cur_id.split(':')
@@ -1182,15 +1182,6 @@ def get_wgd_single_solution(cn_profile, max_n_iterations=25, total_cn=False):
             return base_paths
 
     return None
-
-
-def _check_loh_single_solution(solution, cn_profile, time_limit_loh_filters=60, all_loh_solutions=False, total_cn=False):
-    diffs = get_events_diff_from_coords_wgd([solution], cn_profile, lexsort_diffs=True, filter_missed_lohs=False)
-    if 0 in cn_profile:
-        diffs = loh_filters_for_graph_result_diffs_wgd(
-            diffs, cn_profile, total_cn=total_cn,
-            return_all_solutions=all_loh_solutions, shuffle_diffs=True)
-    return len(diffs) > 0
 
 
 def __get_events_for_cur_start_ends_wgd_single_solution(

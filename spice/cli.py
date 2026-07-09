@@ -189,14 +189,14 @@ def main_event_inference(args):
 
     # Check number of samples and warn if many
     import pandas as pd
-    copynumber_file = config['input_files']['copynumber']
+    copynumber_file = resolve_copynumber_file(return_raw=True)
     df = pd.read_csv(copynumber_file, sep='\t', usecols=['sample_id'])
     n_samples = df['sample_id'].nunique()
     logger.info(f'Input copy-number file contains {n_samples} unique samples.')
     if n_samples > 50:
         logger.warning("=" * 80)
         logger.warning("!!! WARNING !!!")
-        logger.warning("Large number of input samples detected (N={n_samples}).")
+        logger.warning(f"Large number of input samples detected (N={n_samples}).")
         logger.warning("")
         logger.warning("SPICE can be very slow when processing many samples in serial mode.")
         logger.warning("For large datasets, we strongly recommend using the Snakemake workflow")
@@ -226,7 +226,7 @@ def main_event_inference(args):
             skip_centromeres=bool(args.pre_skip_centromeres),
         )
     elif 'preprocessing' in which and not args.run_preprocessing:
-        logger.info('Skipping preprocessing (default). Use --run-preprocessing to enable it.')
+        logger.warning('Skipping preprocessing step: requested via --event-steps but --run-preprocessing was not passed. Use --run-preprocessing to actually run it.')
 
     chrom_segments_file = resolve_copynumber_file()
 
@@ -341,7 +341,9 @@ def main_event_inference(args):
                     n_iteration_scale=config['params']['mcmc_n_iterations_scale'],
                     log_progress=True,
                     fail_on_empty=False,
-                    skip_loh_check=skip_loh_check
+                    skip_loh_check=skip_loh_check,
+                    min_T=config['params']['mcmc_min_T'],
+                    max_T=config['params']['mcmc_max_T'],
                 )
 
             results = _run_batch(cur_ids, args.cores, f'Large chromosomes ({wgd_status})', run_mcmc, logger)
@@ -356,7 +358,6 @@ def main_event_inference(args):
         solved_dirs = (
             [os.path.join(results_events_dir, wgd, 'knn_solved_chroms') for wgd in ['nowgd', 'wgd']] +
             [os.path.join(results_events_dir, wgd, 'full_paths_single_solution') for wgd in ['nowgd', 'wgd']] +
-            [os.path.join(results_events_dir, wgd, 'mcmc_solved_chroms_full') for wgd in ['nowgd', 'wgd']] +
             [os.path.join(results_events_dir, wgd, 'mcmc_solved_chroms_large') for wgd in ['nowgd', 'wgd']]
         )
         combine_final_events(
@@ -764,8 +765,8 @@ Examples:
   spice event_inference --config <path/to/config> --clean
   
   # Plotting
-  spice plotting --config <path/to/config> --plot-sample "sample_1"
-  spice plotting --config <path/to/config> --plot-id "sample_1:chr1:cn_a"
+  spice plotting --config <path/to/config> --plot-events-per-sample "sample_1"
+  spice plotting --config <path/to/config> --plot-events-per-id "sample_1:chr1:cn_a"
   
   # Loci detection (de-novo)
   spice loci_detection --config <path/to/config>

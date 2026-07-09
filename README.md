@@ -156,7 +156,7 @@ SPICE expects tab-separated input files with copy-number segments. See example f
 
 **Optional files:**
 - `wgd_status`: TSV with WGD status per sample (see section 1.3)
-- `xy_samples`: TSV with sex status per sample (see section 1.4)
+- `xy_status`: TSV with sex status per sample (see section 1.4)
 - `sv`: Pickle file (`.pickle`) with SV calls used for SV-constrained event matching (see section 3.2.4)
 
 Total copy-number mode can be enabled by setting `params.total_cn: True` in the config file.
@@ -199,8 +199,8 @@ Notes
 
 SPICE supports resolving sample sex (XY vs XX) either via a provided file or automatic inference. This affects handling of `chrX` and `chrY` in preprocessing and splitting.
 
-- Provided status via `xy_samples` file:
-   - Set `input_files.xy_samples` in your config to a TSV file.
+- Provided status via `xy_status` file:
+   - Set `input_files.xy_status` in your config to a TSV file.
    - The file must have two columns: first column is the sample identifier (used as index), second column named `xy` with boolean values (`True`/`False`) indicating XY (male) vs XX (female).
    - Example:
       ```tsv
@@ -210,7 +210,7 @@ SPICE supports resolving sample sex (XY vs XX) either via a provided file or aut
       ```
 
 - Inferred XY status:
-   - If `input_files.xy_samples` is missing or empty, SPICE infers XY by checking if any segments exist on chromosome `chrY` for a sample.
+   - If `input_files.xy_status` is missing or empty, SPICE infers XY by checking if any segments exist on chromosome `chrY` for a sample.
 
 Effects
 - For XY samples with haplotype-specific CN, the minor copy number of `chrX` and `chrY` is set to 0 during preprocessing and splitting.
@@ -256,7 +256,7 @@ The preprocessing step runs only when `--run-preprocessing` is provided and prep
 - Data normalization: ensures chromosome names use `chr` prefix; converts starts/ends to integers and adjusts starts to 0-based.
 - CN capping and filtering: caps copy numbers at 8; removes segments shorter than 1kb.
 - WGD resolution: loads from `wgd_status.tsv` or infers as described in section 1.3.
-- Sex resolution: loads from `xy_samples.tsv` or infers by presence of `chrY`; for XY samples with haplotype-specific CN, sets minor CN of `chrX` and `chrY` to 0.
+- Sex resolution: loads from `xy_status.tsv` or infers by presence of `chrY`; for XY samples with haplotype-specific CN, sets minor CN of `chrX` and `chrY` to 0.
 - Neighbor merging: merges adjacent segments with identical CNs to reduce fragmentation.
 - Telomeres and centromeres: fills telomeric regions and optionally bins/unifies centromeres (can be skipped with `--pre-skip-centromeres`).
 - MEDICC2 phasing: optional phasing of haplotypes; can be skipped with `--pre-skip-phasing`.

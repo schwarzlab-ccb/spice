@@ -9,7 +9,7 @@ from tqdm.auto import tqdm
 
 from spice import config, directories
 from spice.length_scales import DEFAULT_SEGMENT_SIZE_DICT, DEFAULT_LENGTH_SCALE_BOUNDARIES
-from spice.utils import (CALC_NEW, open_pickle, save_pickle)
+from spice.utils import (CALC_NEW, open_pickle, save_pickle, add_filename_suffix)
 
 # Use importlib.resources for accessing package data (works with installed packages)
 if sys.version_info >= (3, 9):
@@ -35,7 +35,7 @@ def resolve_copynumber_file(return_raw=False) -> str:
     orig = config['input_files']['copynumber']
     processed = os.path.join(data_dir, f"{name}_processed.tsv")
     if not return_raw:
-        orig = orig.replace('.tsv', '_split.tsv')
+        orig = add_filename_suffix(orig, '_split')
         processed = os.path.join(data_dir, f"{name}_processed_split.tsv")
 
     # Prefer processed split file if available, else original
@@ -80,7 +80,11 @@ def load_sv_data(sv_data_file, chrom_id=None):
         assert {'sample_id', 'chrom'}.issubset(sv_data.columns), (
             f'SV data must have a "chrom_id" column or both "sample_id" and "chrom" columns. '
             f'Got: {sorted(sv_data.columns)}')
-        sv_data['chrom_id'] = sv_data['sample_id'] + ':' + sv_data['chrom'].astype(str)
+        # Normalize chromosome labels the same way as copy-number data (see
+        # load_raw_copy_number_data), so chrom_id joins against copy-number
+        # chrom_ids succeed regardless of the SV file's chromosome naming convention.
+        sv_data['chrom'] = format_chromosomes(sv_data['chrom'])
+        sv_data['chrom_id'] = sv_data['sample_id'].astype(str) + ':' + sv_data['chrom'].astype(str)
     required_columns = {'chrom_id', 'svclass', 'start', 'end'}
     missing_columns = required_columns - set(sv_data.columns)
     assert not missing_columns, f'Missing required SV columns: {sorted(missing_columns)}'

@@ -53,11 +53,11 @@ def full_paths_from_graph_with_sv_wrapper(
         cur_id, is_wgd, sv_data_file, chrom_segments_file, chrom_file,
         sv_matching_threshold=10, all_loh_solutions=True, total_cn=False, output_file=None,
         skip_loh_checks=False, use_cache=True, save_output=True):
-    
+
     # Implemente here to debug the creation of the fail report
     # if cur_id == "sample_DEBUG:chr1:cn_a":
     #     raise ValueError("Debug ID")
-    
+
     log_debug(logger, f"Full path solving for {cur_id} ({'WGD' if is_wgd else 'noWGD'})")
     chrom_id = chrom_id_from_id(cur_id)
     cur_sv_data = load_sv_data(sv_data_file=sv_data_file, chrom_id=chrom_id)

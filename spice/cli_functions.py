@@ -7,8 +7,8 @@ from spice.logging import log_debug
 
 
 def save_fail_reports(failed_reports, results_dir=None, cur_step=None, logger=None):
+    from spice import directories, config
     if results_dir is None:
-        from spice import directories, config
         results_dir = directories['results_dir']
     fail_path = os.path.join(results_dir, config['name'], 'events', f'failed_reports{("_" + cur_step) if cur_step is not None else ""}.tsv')
     if len(failed_reports) == 0:
