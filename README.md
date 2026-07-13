@@ -11,6 +11,16 @@ See the [accompanying BioRxiv preprint](https://www.biorxiv.org/content/10.64898
 
 ## 0. Installation
 
+**Conda Quick start (recommended)** 
+```bash
+conda env create -f environment.yml     # creates the `spice` env (run from this directory)
+conda activate spice
+```
+This installs `medicc2` (which supplies the required `fstlib` + `openfst`), pins `numpy < 2` for the
+FST ABI, and installs scna-spice in editable mode. **Do not `pip install` numpy / scipy / pandas
+into this env afterwards** — layering a pip numpy 2.x over the conda stack corrupts numpy and breaks
+scipy. The manual steps 0.1–0.4 below are the alternative if you'd rather assemble the env yourself.
+
 ### 0.1. Prerequisites
 - Python >= 3.8
 - medicc2 (including openfst)
