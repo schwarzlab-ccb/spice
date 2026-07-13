@@ -32,7 +32,7 @@ setup(
         'fire',
         'pyyaml',
         'joblib',
-        'ortools',
+        'ortools<9.15',  # ortools 9.15+ requires numpy>=2, incompatible with the numpy<2 pin below
         'importlib_resources>=5.0; python_version < "3.9"',
     ],
     extras_require={
