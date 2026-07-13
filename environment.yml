@@ -31,6 +31,7 @@ dependencies:
   - scipy=1.13.*        # >=1.11 for scipy.stats.false_discovery_control
   - pandas=2.0.*
   - seaborn>=0.12       # scna-spice plotting; not pulled by medicc2
+  - pytest              # to run tests/, incl. the installation smoke tests
   - pip
   - pip:
       # scna-spice itself, editable. Its numpy/scipy/pandas/etc. are already satisfied by conda
