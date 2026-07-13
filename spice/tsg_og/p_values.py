@@ -18,6 +18,12 @@ logger = get_logger('tsg_og_p_values')
 CENTROMERES_OBSERVED = data_loaders.load_centromeres(extended=False, observed=True)
 CHROM_LENS = data_loaders.load_chrom_lengths()
 
+# Length-scale slot indices per direction in the optimized-fitness 8-vector
+# (order: small_gain, small_loss, mid1_gain, mid1_loss, mid2_gain, mid2_loss, large_gain, large_loss).
+# Used by the 'fitness' test statistic (see get_actual_p_values_from_results).
+_DIR_SLOTS = {'up': [0, 2, 4, 6], 'down': [1, 3, 5, 7]}
+_FIT_SCALES = ['small', 'mid1', 'mid2', 'large']
+
 def p_value_using_resim(
         cur_chrom,
         cur_up_down,
@@ -109,16 +115,21 @@ def p_value_using_resim(
         loci_fitness = np.maximum(0, np.array([x[0][0].fitness for x in optimized_selection_points]))
         added_events_ = (all_events_at_pos * loci_fitness) / (loci_fitness + 1)
         added_events = np.sum(added_events_)
+        # 'fitness' test statistic: mean optimized fitness over the four same-direction length
+        # scales. Unlike added_events (which saturates via fitness/(fitness+1) and tracks event
+        # density), this is monotone in fitness, so the resulting p-value tracks selection strength.
+        fitness_stat = float(np.mean(loci_fitness[_DIR_SLOTS[cur_up_down]]))
 
         if save_all or (save_outliers is not None and added_events >= save_outliers):
             results.append({
                 'added_events': added_events,
+                'fitness_stat': fitness_stat,
                 'optimized_selection_points': optimized_selection_points,
                 'optimized_selection_points_raw': optimized_selection_points_raw,
                 'cur_resim': cur_resim
             })
         else:
-            results.append({'added_events': added_events})
+            results.append({'added_events': added_events, 'fitness_stat': fitness_stat})
 
     return results
 
@@ -146,8 +157,23 @@ def p_values_within_ci_filter(cur_chrom, optimized_selection_points, cur_resim, 
     return filtered_selection_points
 
 
-def get_actual_p_values_from_results(cur_loci, results, N_random):
-    return ((
-        np.sum(cur_loci["added_events"].values[:, None] <
-               np.array([x["added_events"] for x in results]), axis=1) + 1) / (N_random+1)
-)
+def _observed_statistic(cur_loci, statistic):
+    """Observed per-locus value of the chosen test statistic, matching the null construction."""
+    if statistic == 'added_events':
+        return cur_loci["added_events"].values
+    if statistic == 'fitness':
+        # same direction-matched mean-fitness as recorded in the null (clip <0 to 0)
+        dirn = 'gain' if cur_loci['type'].iloc[0] == 'OG' else 'loss'
+        cols = [f'fitness_{s}_{dirn}' for s in _FIT_SCALES]
+        return np.maximum(0.0, cur_loci[cols].to_numpy(float)).mean(axis=1)
+    raise ValueError(f"unknown statistic {statistic!r} (expected 'added_events' or 'fitness')")
+
+
+def get_actual_p_values_from_results(cur_loci, results, N_random, statistic='added_events'):
+    """Empirical upper-tail p per locus: fraction of null resims whose statistic exceeds the
+    observed value. `statistic` selects the quantity tested -- 'added_events' (SPICE default) or
+    'fitness' (monotone in selection strength; see p_value_using_resim)."""
+    key = 'fitness_stat' if statistic == 'fitness' else 'added_events'
+    obs = _observed_statistic(cur_loci, statistic)
+    null = np.array([x[key] for x in results])
+    return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (N_random + 1)

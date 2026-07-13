@@ -468,6 +468,7 @@ def assign_p_values(
     output_dir=None,
     data_per_length_scale=None,
     overwrite=False,
+    statistic='added_events',
 ):
     """Assign p-values to loci, either loading from cache or calculating from scratch.
     
@@ -511,7 +512,7 @@ def assign_p_values(
             
             # Apply p-values to loci dataframe
             cur_loci = loci_df.query('chrom == @cur_chrom and type == @cur_type')
-            p_values = get_actual_p_values_from_results(cur_loci, p_value_results, N_random)
+            p_values = get_actual_p_values_from_results(cur_loci, p_value_results, N_random, statistic=statistic)
             loci_df.loc[cur_loci.index, 'p_value_raw'] = p_values
     
     loci_df['p_value'] = false_discovery_control(loci_df['p_value_raw'].values)
