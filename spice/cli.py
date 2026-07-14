@@ -603,6 +603,17 @@ def main_loci_detection(args):
         steps_to_run = steps_to_run[0]
     logger.info(f'Running the following loci detection steps: {steps_to_run}')
 
+    # `--chrom` runs a single chromosome as a parallel scatter unit (detection + its fitness p-value
+    # part), skipping the cross-chromosome combine.
+    if args.chrom is not None:
+        if args.chrom not in list(chromosomes):
+            raise ValueError(f'--chrom {args.chrom} not among detected chromosomes: {list(chromosomes)}')
+        chromosomes = [args.chrom]
+        logger.info(f'Restricting to a single chromosome (scatter unit): {args.chrom}')
+    calc_p = loci_params['calculate_p_value']
+    N_random = args.n_random if args.n_random is not None else loci_params['p_values_N_random']
+    n_iter_p = loci_params['p_values_N_iterations']
+
     for chrom in chromosomes:
         if steps_to_run == "combine":
             continue
@@ -637,6 +648,16 @@ def main_loci_detection(args):
             within_ci_N_iterations=loci_params['within_ci_N_iterations'],
             th_locus_prominence=loci_params['th_locus_prominence'],
         )
+        if calc_p:
+            from spice.loci_pvalues import compute_chrom_parts
+            compute_chrom_parts(chrom, loci_results_dir, processed_events, N_random=N_random,
+                                n_iterations_optim=n_iter_p, statistics=('fitness',),
+                                methods=('empirical', 'gpd'), overwrite=args.overwrite)
+            logger.info(f'  computed per-chromosome fitness p-value part for {chrom}')
+
+    if args.chrom is not None:
+        logger.info(f'Per-chromosome step for {args.chrom} complete (detection + p-value part); skipping combine.')
+        return
 
     if not (steps_to_run in ['fast', 'default', 'combine'] or 'combine' in steps_to_run or '+' in steps_to_run):
         logger.info(steps_to_run)
@@ -984,8 +1005,18 @@ Examples:
         default=1,
         help='Number of cores for local Snakemake execution (-c, default: 1)'
     )
+    parser_loci.add_argument(
+        '--chrom',
+        default=None,
+        help='Run detection + the per-chromosome fitness p-value for this one chromosome only '
+             '(a parallel scatter unit); skips the cross-chromosome combine.'
+    )
+    parser_loci.add_argument(
+        '--n-random', dest='n_random', type=int, default=None,
+        help='resim iterations for the fitness p-value (default: config p_values_N_random)'
+    )
     parser_loci.set_defaults(func=main_loci_detection)
-    
+
     # ===== LOCI ASSIGNMENT SUBPARSER =====
     parser_assign = subparsers.add_parser(
         'loci_assignment',

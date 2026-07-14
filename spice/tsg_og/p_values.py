@@ -169,11 +169,34 @@ def _observed_statistic(cur_loci, statistic):
     raise ValueError(f"unknown statistic {statistic!r} (expected 'added_events' or 'fitness')")
 
 
-def get_actual_p_values_from_results(cur_loci, results, N_random, statistic='added_events'):
-    """Empirical upper-tail p per locus: fraction of null resims whose statistic exceeds the
-    observed value. `statistic` selects the quantity tested -- 'added_events' (SPICE default) or
-    'fitness' (monotone in selection strength; see p_value_using_resim)."""
+def _gpd_upper_tail_p(obs, null, N_random, tail_q=0.90, min_exc=15):
+    """Sub-floor upper-tail p: empirical in the body, a Generalized-Pareto peaks-over-threshold fit
+    above the `tail_q` quantile (Knijnenburg 2009). Extrapolates past the 1/(N+1) empirical floor
+    without a normality assumption, so strong loci beyond the null's range get distinct p-values."""
+    from scipy import stats
+    null = np.asarray(null, float); obs = np.asarray(obs, float)
+    p = (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (N_random + 1)   # empirical body/fallback
+    u = np.quantile(null, tail_q)
+    exc = null[null > u] - u
+    if len(exc) >= min_exc:
+        c, _, scale = stats.genpareto.fit(exc, floc=0)
+        frac_above = np.mean(null > u)
+        hi = obs > u
+        p[hi] = np.clip(frac_above * stats.genpareto.sf(obs[hi] - u, c, loc=0, scale=scale),
+                        np.finfo(float).tiny, 1.0)
+    return p
+
+
+def get_actual_p_values_from_results(cur_loci, results, N_random, statistic='added_events',
+                                     method='empirical'):
+    """Upper-tail p per locus vs the resim null. `statistic` selects the tested quantity --
+    'added_events' (SPICE default) or 'fitness' (monotone in selection strength). `method` selects
+    the tail: 'empirical' (count; floors at 1/(N+1)) or 'gpd' (peaks-over-threshold; sub-floor)."""
     key = 'fitness_stat' if statistic == 'fitness' else 'added_events'
     obs = _observed_statistic(cur_loci, statistic)
     null = np.array([x[key] for x in results])
-    return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (N_random + 1)
+    if method == 'gpd':
+        return _gpd_upper_tail_p(obs, null, N_random)
+    if method == 'empirical':
+        return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (N_random + 1)
+    raise ValueError(f"unknown method {method!r} (expected 'empirical' or 'gpd')")
