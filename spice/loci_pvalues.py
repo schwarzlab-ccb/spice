@@ -13,7 +13,7 @@ from scipy.stats import false_discovery_control
 
 from spice.utils import open_pickle, save_pickle
 from spice.tsg_og.p_values import p_value_using_resim, get_actual_p_values_from_results
-from spice.tsg_og.loci import create_loci_df, calculate_events_per_loci_df
+from spice.tsg_og.loci import create_loci_df
 
 TRACKS = ('OG', 'TSG')
 _TYPE_TO_UPDOWN = {'OG': 'up', 'TSG': 'down'}
@@ -60,16 +60,17 @@ def compute_chrom_parts(cur_chrom, loci_results_dir, processed_events, N_random,
                         n_iterations_optim=1000, statistics=('fitness',), methods=('empirical', 'gpd'),
                         overwrite=False):
     """Per-chromosome raw (pre-FDR) p-value part. Rebuilds this chromosome's loci_df from its
-    detection cache (the same create_loci_df + calculate_events_per_loci_df that combine uses, so the
-    (chrom, rank_on_chrom) keys line up), computes raw p for both tracks, and writes
-    loci_results_dir/p_values/parts/{chrom}.tsv keyed by (chrom, rank_on_chrom, type)."""
+    detection cache with the same create_loci_df combine uses (so the (chrom, rank_on_chrom) keys and
+    the fitness columns line up), computes raw p for both tracks, and writes
+    loci_results_dir/p_values/parts/{chrom}.tsv keyed by (chrom, rank_on_chrom, type). `processed_events`
+    is accepted for signature parity but not needed here (the fitness statistic reads only the
+    fitness_* columns; no added_events)."""
     det = os.path.join(loci_results_dir, 'detection', cur_chrom)
     sp = {cur_chrom: open_pickle(os.path.join(det, 'final_selection_points.pickle'))}
     widths = {cur_chrom: open_pickle(os.path.join(det, 'final_loci_widths.pickle'))}
     dpls = open_pickle(os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle'))
 
     loci_df = create_loci_df(sp, widths, nr_stds_widths=2, min_widths_is_small_kernel=True)
-    loci_df = calculate_events_per_loci_df(loci_df, all_selection_points=sp, final_events_df=processed_events)
 
     raw = [compute_track(loci_df, cur_chrom, typ, dpls, N_random, n_iterations_optim,
                          statistics=statistics, methods=methods, cache_dir=loci_results_dir,

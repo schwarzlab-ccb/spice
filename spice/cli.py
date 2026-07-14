@@ -610,7 +610,7 @@ def main_loci_detection(args):
             raise ValueError(f'--chrom {args.chrom} not among detected chromosomes: {list(chromosomes)}')
         chromosomes = [args.chrom]
         logger.info(f'Restricting to a single chromosome (scatter unit): {args.chrom}')
-    calc_p = loci_params['calculate_p_value']
+    calc_p = loci_params.get('calculate_p_value', True)
     N_random = args.n_random if args.n_random is not None else loci_params['p_values_N_random']
     n_iter_p = loci_params['p_values_N_iterations']
 
@@ -664,13 +664,15 @@ def main_loci_detection(args):
         logger.warning("Loci detection steps do not include 'combine'. Final combination of loci across chromosomes will be skipped.")
         return
 
-    # Combine results from all chromosomes
+    # Combine results from all chromosomes. The old added_events p-value path is disabled
+    # (calculate_p_value=False); the p-value is the FITNESS one, assembled from the per-chromosome
+    # raw-p parts + one global BH-FDR below.
     logger.info('Combining all loci detection results across chromosomes')
     from spice.main_loci_functions import combine_loci
     final_loci_df, filtered_selection_points, filtered_loci_widths = combine_loci(
         loci_results_dir=loci_results_dir,
         processed_events=processed_events,
-        calculate_p_value=loci_params['calculate_p_value'],
+        calculate_p_value=False,
         p_values_N_random=loci_params['p_values_N_random'],
         p_values_N_iterations=loci_params['p_values_N_iterations'],
         post_p_value_N_iterations=loci_params['post_p_value_N_iterations'],
@@ -678,6 +680,16 @@ def main_loci_detection(args):
         overwrite=args.overwrite,
         mode='detection'
     )
+
+    # Fitness p-value: join the per-chromosome raw-p parts, one global BH-FDR, and make the
+    # empirical fitness p the canonical `p_value` (p_fitness_gpd kept as a column for ranking).
+    if calc_p:
+        from spice.loci_pvalues import merge_parts
+        final_loci_df = merge_parts(final_loci_df, loci_results_dir,
+                                    statistics=('fitness',), methods=('empirical', 'gpd'))
+        if 'p_fitness_empirical' in final_loci_df.columns:
+            final_loci_df['p_value'] = final_loci_df['p_fitness_empirical']
+        logger.info('Assigned fitness p-value (p_value = p_fitness_empirical; p_fitness_gpd kept as a column)')
 
     # Save final combined loci results
     final_loci_output_path = os.path.join(config['directories']['results_dir'], config['name'], 'final_loci_detection.tsv')
