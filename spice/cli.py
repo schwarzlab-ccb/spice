@@ -654,6 +654,7 @@ def main_loci_detection(args):
         p_values_N_iterations=loci_params['p_values_N_iterations'],
         post_p_value_N_iterations=loci_params['post_p_value_N_iterations'],
         p_value_threshold=loci_params['p_value_threshold'],
+        p_value_statistic=loci_params['p_value_statistic'],
         overwrite=args.overwrite,
         mode='detection'
     )
