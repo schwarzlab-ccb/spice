@@ -11,7 +11,7 @@ from spice.tsg_og.simulation import resimulate_events_multiple, copy_list_of_sel
 from spice.tsg_og.detection import (
     convolution_simulation_per_ls, SelectionPoints, within_ci_fitness_filter,
     _optimize_selection_points)
-from spice.length_scales import DEFAULT_SEGMENT_SIZE_DICT, LS_I_DICT
+from spice.length_scales import LENGTH_SCALE_NAMES, DEFAULT_SEGMENT_SIZE_DICT, LS_I_DICT
 
 logger = get_logger('tsg_og_p_values')
 
@@ -22,7 +22,6 @@ CHROM_LENS = data_loaders.load_chrom_lengths()
 # (order: small_gain, small_loss, mid1_gain, mid1_loss, mid2_gain, mid2_loss, large_gain, large_loss).
 # Used by the 'fitness' test statistic (see get_actual_p_values_from_results).
 _DIR_SLOTS = {'up': [0, 2, 4, 6], 'down': [1, 3, 5, 7]}
-_FIT_SCALES = ['small', 'mid1', 'mid2', 'large']
 
 def p_value_using_resim(
         cur_chrom,
@@ -123,7 +122,7 @@ def p_value_using_resim(
         cur_results = {'added_events': added_events, 'fitness_stat': fitness_stat}
         cur_results = {**cur_results,
                        **{f'fit_{ls}': loci_fitness[_DIR_SLOTS[cur_up_down][i]]
-                          for i, ls in enumerate(['small', 'mid1', 'mid2', 'large'])}
+                          for i, ls in enumerate(LENGTH_SCALE_NAMES)}
         }
             
         if save_all or (save_outliers is not None and added_events >= save_outliers):
@@ -168,9 +167,7 @@ def _observed_statistic(cur_loci, statistic):
         return cur_loci["added_events"].values
     if statistic == 'fitness':
         # same direction-matched mean-fitness as recorded in the null (clip <0 to 0)
-        dirn = 'gain' if cur_loci['type'].iloc[0] == 'OG' else 'loss'
-        cols = [f'fitness_{s}_{dirn}' for s in _FIT_SCALES]
-        return np.maximum(0.0, cur_loci[cols].to_numpy(float)).mean(axis=1)
+        return _observed_fitness_per_ls(cur_loci).mean(axis=1)
     raise ValueError(f"unknown statistic {statistic!r} (expected 'added_events' or 'fitness')")
 
 
@@ -182,3 +179,22 @@ def get_actual_p_values_from_results(cur_loci, results, N_random, statistic='add
     obs = _observed_statistic(cur_loci, statistic)
     null = np.array([x[key] for x in results])
     return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (N_random + 1)
+
+
+def get_actual_p_values_per_ls_from_results(cur_peaks, results, N_random):
+    """Empirical upper-tail p per locus, per length scale, for the 'fitness' statistic: fraction of
+    null resims whose per-length-scale fitness (`fit_<ls>` in `results`, from `p_value_using_resim`)
+    exceeds the observed per-length-scale fitness. Returns an (n_loci, len(LENGTH_SCALE_NAMES)) array,
+    columns ordered as `LENGTH_SCALE_NAMES`."""
+    obs = _observed_fitness_per_ls(cur_peaks)  # (n_loci, n_ls)
+    null = np.array([[x[f'fit_{ls}'] for ls in LENGTH_SCALE_NAMES] for x in results])  # (N_random, n_ls)
+    return (np.sum(obs[:, None, :] < null[None, :, :], axis=1) + 1) / (N_random + 1)
+
+
+def _observed_fitness_per_ls(cur_loci):
+    """Observed per-locus, per-length-scale fitness (clip <0 to 0), matching the null construction
+    (see `fit_<ls>` in `p_value_using_resim`), direction-matched via `up_down`."""
+    ls_is = np.array([0, 2, 4, 6]) if cur_loci['up_down'].iloc[0] == 'up' else np.array([1, 3, 5, 7])
+    cols = [f'fit_{s}' for s in ls_is]
+    assert cur_loci[cols].min().min() >= 0
+    return np.maximum(0.0, cur_loci[cols].to_numpy(float))  # (n_loci, len(LENGTH_SCALE_NAMES))
