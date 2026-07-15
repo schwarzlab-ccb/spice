@@ -120,16 +120,21 @@ def p_value_using_resim(
         # density), this is monotone in fitness, so the resulting p-value tracks selection strength.
         fitness_stat = float(np.mean(loci_fitness[_DIR_SLOTS[cur_up_down]]))
 
+        cur_results = {'added_events': added_events, 'fitness_stat': fitness_stat}
+        cur_results = {**cur_results,
+                       **{f'fit_{ls}': loci_fitness[_DIR_SLOTS[cur_up_down][i]]
+                          for i, ls in enumerate(['small', 'mid1', 'mid2', 'large'])}
+        }
+            
         if save_all or (save_outliers is not None and added_events >= save_outliers):
-            results.append({
-                'added_events': added_events,
-                'fitness_stat': fitness_stat,
-                'optimized_selection_points': optimized_selection_points,
-                'optimized_selection_points_raw': optimized_selection_points_raw,
-                'cur_resim': cur_resim
-            })
-        else:
-            results.append({'added_events': added_events, 'fitness_stat': fitness_stat})
+            cur_results = {
+                **cur_results,
+                **{
+                    'optimized_selection_points': optimized_selection_points,
+                    'optimized_selection_points_raw': optimized_selection_points_raw,
+                    'cur_resim': cur_resim
+            }}
+        results.append(cur_results)
 
     return results
 
