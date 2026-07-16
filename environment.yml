@@ -1,0 +1,39 @@
+# Conda environment for scna-spice (the `spice` CLI) + its FST event-inference engine.
+#
+# Why the pins matter (learned the hard way):
+#   * SPICE's event inference is finite-state-transducer based -- it imports `fstlib` AND `medicc`,
+#     both of which ship *inside* the `medicc2` bioconda package (there is no standalone `fstlib`
+#     on bioconda/conda-forge; the PyPI `fstlib` is an unrelated name-collision).
+#   * `medicc2` pins numpy < 2. Everything numpy-linked (numpy/scipy/pandas) therefore comes from
+#     conda-forge at a numpy-1.26-compatible ABI. Do NOT `pip install` numpy/scipy/pandas into this
+#     env -- mixing a pip numpy 2.x over conda leaves a corrupt half-numpy-1/half-numpy-2 tree that
+#     breaks scipy (dfitpack/ufunc errors).
+#   * scipy must be >= 1.11 (scna-spice's loci p-values use scipy.stats.false_discovery_control).
+#
+# One-step create into the prefix the pipeline references (recon/spice runs use `conda <prefix>`):
+#   conda env create -f environment.yml -p /projects/ag-schwarzr/adam_conda/spice
+# ...or by name (`spice`):
+#   conda env create -f environment.yml
+# Run from this directory (the `-e .` editable install below points at scna-spice here).
+name: spice
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.10
+  # FST engine (`fstlib`) + `medicc` module + openfst. Also pulls most of scna-spice's numpy-linked
+  # deps (scipy, pandas, matplotlib-base, pyyaml, joblib, biopython) and pins numpy < 2.
+  - medicc2=1.1.2
+  # numpy-linked core pinned explicitly to a numpy-1.26-compatible ABI (medicc2 alone would allow
+  # scipy>=1.7, which can resolve to a numpy-2-built scipy and break -- see the header note).
+  - numpy=1.26.*
+  - scipy=1.13.*        # >=1.11 for scipy.stats.false_discovery_control
+  - pandas=2.0.*
+  - seaborn>=0.12       # scna-spice plotting; not pulled by medicc2
+  - pytest              # to run tests/, incl. the installation smoke tests
+  - pip
+  - pip:
+      # scna-spice itself, editable. Its numpy/scipy/pandas/etc. are already satisfied by conda
+      # above (so pip won't touch numpy); this only adds the PyPI-only deps (ortools, tqdm, fire).
+      - -e .

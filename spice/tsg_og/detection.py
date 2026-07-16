@@ -1147,15 +1147,18 @@ def merge_overlapping_loci(
     loci_df = create_loci_df({cur_chrom: selection_points}, {cur_chrom: loci_widths}, nr_stds_widths=nr_stds_widths).sort_values('rank_on_chrom')
     log_debug(logger, f'Found {len(loci_df)} loci for {cur_chrom}.')
 
-    # Find overlapping loci
+    # Find overlapping loci. create_loci_df's canonical schema is start/end/type (the std-based
+    # bounds pos±width/2, and OG/TSG direction); this step still referenced the retired
+    # start_std/end_std/up_down names -> KeyError. It only surfaced under loci_steps='default' (which
+    # runs `merging`; 'fast' skips it), so the schema drift had gone unnoticed. Map to current columns.
     loci_within_other_loci = np.logical_and(
         np.logical_and(
-            loci_df['start_std'].values[:, None] < loci_df['pos'].values,
-            loci_df['end_std'].values[:, None] > loci_df['pos'].values
+            loci_df['start'].values[:, None] < loci_df['pos'].values,
+            loci_df['end'].values[:, None] > loci_df['pos'].values
         ),
         np.logical_and(
             loci_df['chrom'].values[:, None] == loci_df['chrom'].values,
-            loci_df['up_down'].values[:, None] == loci_df['up_down'].values,
+            loci_df['type'].values[:, None] == loci_df['type'].values,
         )
     )
     np.fill_diagonal(loci_within_other_loci, False)

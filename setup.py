@@ -3,7 +3,7 @@ from pathlib import Path
 
 setup(
     name='scna-spice',
-    version='0.1.2',
+    version='0.1.3',
     author='Tom L Kaufmann',
     description='SPICE: Selection Patterns In somatic Copy-number Events',
     author_email='tkau93@gmail.com, marina.55kovic@gmail.com, roland.f.schwarz@gmail.com',
@@ -32,7 +32,7 @@ setup(
         'fire',
         'pyyaml',
         'joblib',
-        'ortools==9.8.3296',
+        'ortools<9.15',  # ortools 9.15+ requires numpy>=2, incompatible with the numpy<2 pin below
         'importlib_resources>=5.0; python_version < "3.9"',
     ],
     extras_require={
