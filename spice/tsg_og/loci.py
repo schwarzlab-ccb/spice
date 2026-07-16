@@ -468,9 +468,10 @@ def assign_p_values(
     data_per_length_scale=None,
     overwrite=False,
     statistic='added_events',
+    mode='random',
 ):
     """Assign p-values to loci, either loading from cache or calculating from scratch.
-    
+
     Args:
         loci_df: DataFrame with loci to assign p-values to
         N_random: Number of random simulations for p-value calculation
@@ -478,12 +479,13 @@ def assign_p_values(
         output_dir: Directory to cache/load p-value results
         data_per_length_scale: Data per length scale (required if overwrite=True)
         overwrite: If True, recalculate p-values from scratch. If False, load from cache.
+        mode: Resimulation-locus selection mode passed to p_value_using_resim ('random' or 'top')
     """
     from spice.tsg_og.p_values import (
         p_value_using_resim, get_actual_p_values_from_results, get_actual_p_values_per_ls_from_results)
 
-    
-    log_debug(logger, f'Assigning p-values to loci for {len(data_per_length_scale)} chromosomes with N_random={N_random}, n_iterations_optim={n_iterations_optim}, overwrite={overwrite}')
+
+    log_debug(logger, f'Assigning p-values to loci for {len(data_per_length_scale)} chromosomes with N_random={N_random}, n_iterations_optim={n_iterations_optim}, mode={mode}, overwrite={overwrite}')
 
     assert statistic in ['added_events', 'fitness'], 'Parameter `statistic` has to be either "added_events" or "fitness"'
 
@@ -498,11 +500,11 @@ def assign_p_values(
             # Create cache filename
             p_values_cache_file = os.path.join(
                 output_dir, 'p_values',
-                f'{cur_chrom}_{cur_type}_N_random_{N_random}_N_optim_{n_iterations_optim}.pickle'
+                f'{cur_chrom}_{cur_type}_N_random_{N_random}_N_optim_{n_iterations_optim}_mode_{mode}.pickle'
             )
-            
+
             # Load or calculate p-value results
-            if overwrite or not os.path.exists(p_values_cache_file):                
+            if overwrite or not os.path.exists(p_values_cache_file):
                 logger.info(f"Calculating p-value distribution for {cur_chrom} ({cur_type})")
                 p_value_results = p_value_using_resim(
                     cur_chrom=cur_chrom,
@@ -510,6 +512,7 @@ def assign_p_values(
                     N_test=N_random,
                     data_per_length_scale=data_per_length_scale[cur_chrom],
                     n_iterations_optim=n_iterations_optim,
+                    mode=mode,
                 )
                 # Save to cache
                 os.makedirs(os.path.dirname(p_values_cache_file), exist_ok=True)

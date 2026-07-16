@@ -551,6 +551,7 @@ def combine_loci(
     calculate_p_value: bool = False,
     p_value_threshold: float = 0.05,
     p_value_statistic: str = 'added_events',
+    p_values_mode: str = 'random',
     overwrite: bool = False,
     mode: str = 'detection',
 ) -> pd.DataFrame:
@@ -633,6 +634,7 @@ def combine_loci(
             final_events_df=processed_events,
             p_value_threshold=p_value_threshold,
             p_value_statistic=p_value_statistic,
+            p_values_mode=p_values_mode,
             overwrite=overwrite,
         )
         logger.info(f'Filtered to {sum(len(x) for x in filtered_loci_widths.values())} significant loci (p < {p_value_threshold})')
@@ -980,6 +982,7 @@ def loci_assignment(
     p_values_N_random: int = 10_000,
     p_values_N_iterations: int = 1_000,
     post_p_value_N_iterations: int = 25_000,
+    p_values_mode: str = 'random',
     overwrite: bool = False,
     overwrite_preprocessing: bool = False
 ):
@@ -1097,6 +1100,7 @@ def loci_assignment(
         p_values_N_random=p_values_N_random,
         p_values_N_iterations=p_values_N_iterations,
         post_p_value_N_iterations=post_p_value_N_iterations,
+        p_values_mode=p_values_mode,
         calculate_p_value=False,
         overwrite=overwrite,
         mode='assignment'
@@ -1153,6 +1157,7 @@ def full_filter_by_p_values(
     loci_df=None,
     p_value_threshold=0.05,
     p_value_statistic='added_events',
+    p_values_mode='random',
     N_random=10_000,
     p_values_N_iterations=1_000,
     post_p_value_N_iterations=25_000,
@@ -1176,7 +1181,8 @@ def full_filter_by_p_values(
         output_dir=output_dir,
         data_per_length_scale=all_data_per_length_scale,
         overwrite=overwrite,
-        statistic=p_value_statistic
+        statistic=p_value_statistic,
+        mode=p_values_mode,
     )
 
     if len(loci_df) == 0:

@@ -72,6 +72,7 @@ loci_detection:
   calculate_p_value: True # Whether to calculate p-values from scratch (if False, load from cache)
   p_value_threshold: 0.05 # Threshold for significant p-values
   p_value_statistic: 'added_events' # Statistic to use for p-value calculation ('added_events' or 'fitness')
+  p_values_mode: 'random' # How resimulation loci are chosen for p-value calculation ('random' or 'top')
   # Event preprocessing parameters
   remove_plateaus: True # Remove events overlapping copy-number plateaus
   remove_chrY: True # Remove chrY events from analysis
