@@ -54,9 +54,11 @@ class CALC_NEW:
         self.filename = filename
         self.force_new = force_new
         self.logger = get_logger('CALC_NEW')
-        if verbose:
-            self.logger.setLevel(logging.DEBUG)
-        else:
+        # Respect the globally configured level (get_logger already applied it from the CLI's
+        # --log/--debug). Previously verbose=True force-pinned this shared logger to DEBUG, which
+        # flooded the logs with "File path is None, ignoring calc_new" even at INFO. verbose=False can
+        # still explicitly quiet it to WARNING; the default leaves the configured level untouched.
+        if not verbose:
             self.logger.setLevel(logging.WARNING)
 
 

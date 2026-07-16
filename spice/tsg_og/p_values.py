@@ -216,8 +216,9 @@ def get_actual_p_values_per_ls_from_results(cur_peaks, results, N_random):
 
 def _observed_fitness_per_ls(cur_loci):
     """Observed per-locus, per-length-scale fitness (clip <0 to 0), matching the null construction
-    (see `fit_<ls>` in `p_value_using_resim`), direction-matched via `up_down`."""
-    ls_is = np.array([0, 2, 4, 6]) if cur_loci['up_down'].iloc[0] == 'up' else np.array([1, 3, 5, 7])
-    cols = [f'fit_{s}' for s in ls_is]
-    assert cur_loci[cols].min().min() >= 0
+    (see `fit_<ls>` in `p_value_using_resim`), direction-matched via `type` (OG=gain / TSG=loss)."""
+    direction = 'gain' if cur_loci['type'].iloc[0] == 'OG' else 'loss'
+    cols = [f'fitness_{ls}_{direction}' for ls in LENGTH_SCALE_NAMES]
+    # clip <0 like the null construction (raw fitness can be negative; the old pre-clipped fit_<i>
+    # columns this was written for no longer exist in create_loci_df's fitness_<scale>_<dir> schema)
     return np.maximum(0.0, cur_loci[cols].to_numpy(float))  # (n_loci, len(LENGTH_SCALE_NAMES))
