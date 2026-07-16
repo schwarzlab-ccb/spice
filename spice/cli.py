@@ -613,6 +613,7 @@ def main_loci_detection(args):
     calc_p = loci_params.get('calculate_p_value', True)
     N_random = args.n_random if args.n_random is not None else loci_params['p_values_N_random']
     n_iter_p = loci_params['p_values_N_iterations']
+    p_value_mode = loci_params.get('p_value_mode', 'random')   # 'random' | 'top' (top mirrors detection)
 
     for chrom in chromosomes:
         if steps_to_run == "combine":
@@ -652,7 +653,8 @@ def main_loci_detection(args):
             from spice.loci_pvalues import compute_chrom_parts
             compute_chrom_parts(chrom, loci_results_dir, processed_events, N_random=N_random,
                                 n_iterations_optim=n_iter_p, statistics=('fitness',),
-                                methods=('empirical', 'gpd'), overwrite=args.overwrite)
+                                methods=('empirical', 'gpd'), overwrite=args.overwrite,
+                                mode=p_value_mode)
             logger.info(f'  computed per-chromosome fitness p-value part for {chrom}')
 
     if args.chrom is not None:
