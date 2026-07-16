@@ -12,11 +12,10 @@ from scipy.stats import false_discovery_control
 from spice import data_loaders
 from spice.logging import log_debug
 from spice.utils import get_logger, suppress_warnings, assert_close, open_pickle, save_pickle, CALC_NEW
-from spice.length_scales import DEFAULT_SEGMENT_SIZE_DICT, LS_I_DICT_REV
+from spice.length_scales import DEFAULT_SEGMENT_SIZE_DICT, LENGTH_SCALE_NAMES, LS_I_DICT_REV
 from spice.tsg_og.simulation import (
     convolution_simulation, SelectionPoints, combine_selection_points)
 from spice.tsg_og.event_rate_per_loci import calc_total_events_per_loci
-from spice.tsg_og.p_values import get_actual_p_values_from_results
 
 CENTROMERES = data_loaders.load_centromeres(extended=False, observed=False)
 CHROMS = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
@@ -480,11 +479,20 @@ def assign_p_values(
         data_per_length_scale: Data per length scale (required if overwrite=True)
         overwrite: If True, recalculate p-values from scratch. If False, load from cache.
     """
-    from spice.tsg_og.p_values import p_value_using_resim, get_actual_p_values_from_results
+    from spice.tsg_og.p_values import (
+        p_value_using_resim, get_actual_p_values_from_results, get_actual_p_values_per_ls_from_results)
+
     
     log_debug(logger, f'Assigning p-values to loci for {len(data_per_length_scale)} chromosomes with N_random={N_random}, n_iterations_optim={n_iterations_optim}, overwrite={overwrite}')
 
-    loci_df['p_value_raw'] = 1.
+    assert statistic in ['added_events', 'fitness'], 'Parameter `statistic` has to be either "added_events" or "fitness"'
+
+    loci_df['p_value_raw'] = 1
+    if statistic == 'fitness':
+        for ls in LENGTH_SCALE_NAMES:
+            loci_df[f'p_value_raw_{ls}'] = 1
+
+
     for cur_chrom in data_per_length_scale.keys():
         for cur_type in ['OG', 'TSG']:
             # Create cache filename
@@ -514,7 +522,15 @@ def assign_p_values(
             cur_loci = loci_df.query('chrom == @cur_chrom and type == @cur_type')
             p_values = get_actual_p_values_from_results(cur_loci, p_value_results, N_random, statistic=statistic)
             loci_df.loc[cur_loci.index, 'p_value_raw'] = p_values
-    
+
+            if statistic == 'fitness':
+                p_values_per_ls = get_actual_p_values_per_ls_from_results(cur_loci, p_value_results, N_random)
+                for i, ls in enumerate(LENGTH_SCALE_NAMES):
+                    loci_df.loc[cur_loci.index, f'p_value_raw_{ls}'] = p_values_per_ls[:, i]
+
     loci_df['p_value'] = false_discovery_control(loci_df['p_value_raw'].values)
+    if statistic == 'fitness':
+        for ls in LENGTH_SCALE_NAMES:
+            loci_df[f'p_value_{ls}'] = false_discovery_control(loci_df[f'p_value_raw_{ls}'].values)
 
     return loci_df

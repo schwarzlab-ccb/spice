@@ -1,3 +1,5 @@
+LENGTH_SCALE_NAMES = ['small', 'mid1', 'mid2', 'large']
+
 DEFAULT_LENGTH_SCALE_BOUNDARIES = {
     'small': (100e3, 1e6),
     'mid1': (1e6, 2.5e6),
