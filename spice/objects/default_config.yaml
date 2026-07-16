@@ -45,7 +45,7 @@ loci_detection:
   N_bootstrap: 10 # Number of bootstrap samples for signal bootstrap
   N_kernel: 1000 # Number of kernel samples for convolution kernel and height multiplier
   overwrite_preprocessing: False # Force recalculation of preprocessing caches (bootstrap signals, data_per_length_scale)
-  detection_blocked_distance_th: 5000000 # Blocked distance threshold (in bp)
+  detection_blocked_distance_th: 200000 # Blocked distance threshold (in bp)
   # N_iterations parameters for pipeline steps
   detection_N_iterations_base: 30 # Base number of iterations for detection
   detection_max_N_iterations: 200 # Maximum iterations for detection
