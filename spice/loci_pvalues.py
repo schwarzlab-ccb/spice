@@ -20,7 +20,7 @@ _TYPE_TO_UPDOWN = {'OG': 'up', 'TSG': 'down'}
 
 
 def _null_for_track(cur_chrom, cur_type, data_per_length_scale, N_random, n_iterations_optim,
-                    cache_dir=None, overwrite=False, mode='random'):
+                    cache_dir=None, overwrite=False, mode='random', n_jobs=1):
     """resim null for one (chrom, type), cached under cache_dir/p_values/ (statistic-agnostic:
     each iteration records both added_events and fitness_stat). `mode` ('random'|'top') selects the
     resim-locus strategy and is part of the cache key so top/random nulls don't collide."""
@@ -32,7 +32,7 @@ def _null_for_track(cur_chrom, cur_type, data_per_length_scale, N_random, n_iter
     results = p_value_using_resim(
         cur_chrom=cur_chrom, cur_up_down=_TYPE_TO_UPDOWN[cur_type], N_test=N_random,
         data_per_length_scale=data_per_length_scale, n_iterations_optim=n_iterations_optim,
-        mode=mode, skip_tqdm=True)
+        mode=mode, n_jobs=n_jobs, skip_tqdm=True)
     if cache:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         save_pickle(results, cache)
@@ -41,7 +41,7 @@ def _null_for_track(cur_chrom, cur_type, data_per_length_scale, N_random, n_iter
 
 def compute_track(loci_df, cur_chrom, cur_type, data_per_length_scale, N_random,
                   n_iterations_optim=1000, statistics=('fitness',), methods=('empirical', 'gpd'),
-                  cache_dir=None, overwrite=False, mode='random'):
+                  cache_dir=None, overwrite=False, mode='random', n_jobs=1):
     """Raw (pre-FDR) p for the loci of one (chrom, type). Returns a DataFrame indexed like the
     matching rows of loci_df, one column per (statistic, method): '<statistic>_<method>_raw'."""
     cur = loci_df.query('chrom == @cur_chrom and type == @cur_type')
@@ -49,7 +49,7 @@ def compute_track(loci_df, cur_chrom, cur_type, data_per_length_scale, N_random,
     if len(cur) == 0:
         return out
     results = _null_for_track(cur_chrom, cur_type, data_per_length_scale, N_random,
-                              n_iterations_optim, cache_dir, overwrite, mode=mode)
+                              n_iterations_optim, cache_dir, overwrite, mode=mode, n_jobs=n_jobs)
     for stat in statistics:
         for meth in methods:
             out[f'{stat}_{meth}_raw'] = get_actual_p_values_from_results(
@@ -59,7 +59,7 @@ def compute_track(loci_df, cur_chrom, cur_type, data_per_length_scale, N_random,
 
 def compute_chrom_parts(cur_chrom, loci_results_dir, processed_events, N_random,
                         n_iterations_optim=1000, statistics=('fitness',), methods=('empirical', 'gpd'),
-                        overwrite=False, mode='random'):
+                        overwrite=False, mode='random', n_jobs=1):
     """Per-chromosome raw (pre-FDR) p-value part. Rebuilds this chromosome's loci_df from its
     detection cache with the same create_loci_df combine uses (so the (chrom, rank_on_chrom) keys and
     the fitness columns line up), computes raw p for both tracks, and writes
@@ -75,7 +75,7 @@ def compute_chrom_parts(cur_chrom, loci_results_dir, processed_events, N_random,
 
     raw = [compute_track(loci_df, cur_chrom, typ, dpls, N_random, n_iterations_optim,
                          statistics=statistics, methods=methods, cache_dir=loci_results_dir,
-                         overwrite=overwrite, mode=mode) for typ in TRACKS]
+                         overwrite=overwrite, mode=mode, n_jobs=n_jobs) for typ in TRACKS]
     part = loci_df[['chrom', 'rank_on_chrom', 'type']].join(pd.concat(raw))
 
     out_dir = os.path.join(loci_results_dir, 'p_values', 'parts')

@@ -614,6 +614,13 @@ def main_loci_detection(args):
     N_random = args.n_random if args.n_random is not None else loci_params['p_values_N_random']
     n_iter_p = loci_params['p_values_N_iterations']
     p_value_mode = loci_params.get('p_value_mode', 'random')   # 'random' | 'top' (top mirrors detection)
+    # Record the resim-null settings actually used this run, so each per-chromosome log names them
+    # (which mode/N_iterations a completed run used is otherwise unrecoverable after the fact).
+    if calc_p:
+        logger.info(f'Fitness p-value (resim null): mode={p_value_mode}, '
+                    f'N_iterations_optim={n_iter_p}, N_random={N_random}')
+    else:
+        logger.info('Fitness p-value resim disabled (calculate_p_value=false)')
 
     for chrom in chromosomes:
         if steps_to_run == "combine":
@@ -654,7 +661,7 @@ def main_loci_detection(args):
             compute_chrom_parts(chrom, loci_results_dir, processed_events, N_random=N_random,
                                 n_iterations_optim=n_iter_p, statistics=('fitness',),
                                 methods=('empirical', 'gpd'), overwrite=args.overwrite,
-                                mode=p_value_mode)
+                                mode=p_value_mode, n_jobs=args.cores)
             logger.info(f'  computed per-chromosome fitness p-value part for {chrom}')
 
     if args.chrom is not None:
@@ -993,6 +1000,12 @@ Examples:
         nargs='+',
         default=None,
         help='Steps to run. If not present will use "loci_steps" from config. Use "fast" for accelerated mode, "all" or "default" for full pipeline, or a trailing + (e.g., split+) to run that step and all subsequent steps.'
+    )
+    parser_loci.add_argument(
+        '--cores', '-j',
+        type=int,
+        default=1,
+        help='Parallel joblib workers for the fitness p-value resim (independent resims; default: 1)'
     )
     parser_loci.add_argument(
         '--overwrite',

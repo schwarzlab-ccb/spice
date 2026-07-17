@@ -1,8 +1,10 @@
+import gc
 import logging
 from tqdm.auto import tqdm
 from copy import deepcopy
 
 import numpy as np
+from joblib import Parallel, delayed
 
 from spice import data_loaders
 from spice.utils import get_logger
@@ -36,7 +38,8 @@ def p_value_using_resim(
         skip_tqdm=False,
         save_all=False,
         save_outliers=None,
-        segment_size_dict=DEFAULT_SEGMENT_SIZE_DICT):
+        segment_size_dict=DEFAULT_SEGMENT_SIZE_DICT,
+        n_jobs=1):
     """Calculate p-values using resimulation.
 
     Args:
@@ -47,6 +50,8 @@ def p_value_using_resim(
             position of the largest residual per resimulation, mirroring locus detection itself)
         n_iterations_optim: Number of optimization iterations (defaults: 1000 for 'random',
             5000 for 'top')
+        n_jobs: parallelise the (independent) resims across this many joblib workers (each worker
+            runs its resims sequentially, single-core). n_jobs<=1 -> original sequential path.
     """
     assert cur_up_down in ['up', 'down'], "cur_up_down must be either 'up' or 'down'"
     assert mode in ['top', 'random'], f"mode must be 'top' or 'random', got {mode!r}"
@@ -67,8 +72,11 @@ def p_value_using_resim(
         centromere_block_start = int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_start'] - tel_cen_distance_th) / segment_size_dict['small'])
         centromere_block_end = int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end'] + tel_cen_distance_th) / segment_size_dict['small'])
 
-    results = []
-    for iteration in tqdm(range(N_test), disable=skip_tqdm, desc="P-value iterations"):
+    def _run_one_resim(iteration):
+        # Deterministic per-resim seed: parallel workers each carry their own global RNG state, so
+        # without this they'd draw identical (correlated) nulls. The direction offset keeps the
+        # gain/loss tracks independent, and it makes the null reproducible.
+        np.random.seed(int(iteration) + (0 if cur_up_down == 'up' else 5_000_000))
         if log_progress:
             logger.info(f'Starting iteration {iteration+1} / {N_test}')
         resim = resimulate_events_multiple(
@@ -182,7 +190,19 @@ def p_value_using_resim(
                     'optimized_selection_points_raw': optimized_selection_points_raw,
                     'cur_resim': cur_resim
             }}
-        results.append(cur_results)
+        # Release this resim's deepcopy + numpy temporaries; over N_test iterations the cyclic
+        # garbage otherwise outpaces the collector and OOMs (worse in top mode's deeper optimize).
+        gc.collect()
+        return cur_results
+
+    # The resims are independent, so parallelise across n_jobs workers (each runs its resims
+    # sequentially, single-core) -- this uses the cores nextflow allocates to LOCI_DETECT_CHROM
+    # instead of leaving 7/8 idle. n_jobs<=1 keeps the original sequential path.
+    if n_jobs and n_jobs > 1:
+        results = Parallel(n_jobs=n_jobs)(delayed(_run_one_resim)(i) for i in range(N_test))
+    else:
+        results = [_run_one_resim(i)
+                   for i in tqdm(range(N_test), disable=skip_tqdm, desc="P-value iterations")]
 
     return results
 
