@@ -86,9 +86,10 @@ def compute_chrom_parts(cur_chrom, loci_results_dir, processed_events, N_random,
 
 
 def merge_parts(loci_df, loci_results_dir, statistics=('fitness',), methods=('empirical', 'gpd')):
-    """Join the per-chromosome raw-p parts onto loci_df by (chrom, rank_on_chrom) and apply one
-    global BH-FDR per (statistic, method), adding p_<statistic>_<method> columns. Drops the raw
-    columns. Leaves loci_df untouched if no parts are present."""
+    """Join the per-chromosome raw-p parts onto loci_df by (chrom, rank_on_chrom). For each
+    (statistic, method) it keeps the raw p-value as p_<statistic>_<method> and adds the global
+    BH-FDR q-value as q_<statistic>_<method>. Drops the intermediate *_raw columns. Leaves loci_df
+    untouched if no parts are present."""
     files = sorted(glob.glob(os.path.join(loci_results_dir, 'p_values', 'parts', '*.tsv')))
     if not files:
         return loci_df
@@ -101,5 +102,7 @@ def merge_parts(loci_df, loci_results_dir, statistics=('fitness',), methods=('em
             col = f'{s}_{m}_raw'
             if col in loci_df.columns:
                 ok = loci_df[col].notna()
-                loci_df.loc[ok, f'p_{s}_{m}'] = false_discovery_control(loci_df.loc[ok, col].to_numpy())
+                loci_df[f'p_{s}_{m}'] = loci_df[col]                     # raw (pre-FDR) p-value
+                loci_df.loc[ok, f'q_{s}_{m}'] = false_discovery_control(  # global BH-FDR q-value
+                    loci_df.loc[ok, col].to_numpy())
     return loci_df.drop(columns=rawcols)

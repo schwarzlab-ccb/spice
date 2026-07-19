@@ -62,8 +62,8 @@ def mcmc_event_selection(
         return_full=False):
     
     from ortools import __version__
-    if __version__ != '9.8.3296':
-        raise ValueError(f"ortools must have version 9.8.3296, current version is {__version__}")
+    if tuple(int(p) for p in __version__.split('.')[:2]) >= (9, 15):
+        raise ValueError(f"ortools must have version < 9.15 (9.15+ requires numpy>=2), current version is {__version__}")
 
     has_wgd = chrom_data.has_wgd
 
