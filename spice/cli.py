@@ -613,7 +613,7 @@ def main_loci_detection(args):
     calc_p = loci_params.get('calculate_p_value', True)
     N_random = args.n_random if args.n_random is not None else loci_params['p_values_N_random']
     n_iter_p = loci_params['p_values_N_iterations']
-    p_value_mode = loci_params.get('p_value_mode', 'random')   # 'random' | 'top' (top mirrors detection)
+    p_value_mode = loci_params.get('p_values_mode', 'random')   # 'random' | 'top' (top mirrors detection)
     # Record the resim-null settings actually used this run, so each per-chromosome log names them
     # (which mode/N_iterations a completed run used is otherwise unrecoverable after the fact).
     if calc_p:

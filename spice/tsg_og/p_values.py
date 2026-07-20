@@ -73,9 +73,13 @@ def p_value_using_resim(
         centromere_block_end = int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end'] + tel_cen_distance_th) / segment_size_dict['small'])
 
     def _run_one_resim(iteration):
-        # Deterministic per-resim seed: parallel workers each carry their own global RNG state, so
-        # without this they'd draw identical (correlated) nulls. The direction offset keeps the
-        # gain/loss tracks independent, and it makes the null reproducible.
+        # Deterministic per-resim seed on the GLOBAL numpy RNG (the resim + optimize stack --
+        # resimulate_events_multiple, the detection MCMC, the positional sampling below -- all draw
+        # from np.random, so seeding it is what controls them). This is only correct under a PROCESS
+        # backend (loky/multiprocessing), where each worker has its own global RNG: workers then draw
+        # independent, reproducible nulls (direction offset keeps the gain/loss tracks independent).
+        # Under a THREADING backend the global RNG is shared and np.random.seed() races across
+        # threads -> correlated/duplicated nulls, so the Parallel() below pins backend='loky'.
         np.random.seed(int(iteration) + (0 if cur_up_down == 'up' else 5_000_000))
         if log_progress:
             logger.info(f'Starting iteration {iteration+1} / {N_test}')
@@ -198,8 +202,12 @@ def p_value_using_resim(
     # The resims are independent, so parallelise across n_jobs workers (each runs its resims
     # sequentially, single-core) -- this uses the cores nextflow allocates to LOCI_DETECT_CHROM
     # instead of leaving 7/8 idle. n_jobs<=1 keeps the original sequential path.
+    # backend='loky' is REQUIRED, not incidental: _run_one_resim seeds the global numpy RNG, which is
+    # only safe with per-process RNG state (see the seed comment above). An explicit backend also
+    # overrides any ambient parallel_backend() context, so a threading backend can't silently correlate
+    # the nulls.
     if n_jobs and n_jobs > 1:
-        results = Parallel(n_jobs=n_jobs)(delayed(_run_one_resim)(i) for i in range(N_test))
+        results = Parallel(n_jobs=n_jobs, backend='loky')(delayed(_run_one_resim)(i) for i in range(N_test))
     else:
         results = [_run_one_resim(i)
                    for i in tqdm(range(N_test), disable=skip_tqdm, desc="P-value iterations")]
