@@ -874,7 +874,7 @@ Examples:
         help='Steps to run: preprocessing, split, all_solutions, disambiguate, large_chroms, combine (default: all). Use a trailing + (e.g., split+) to run that step and all subsequent steps.'
     )
     parser_event.add_argument(
-        '--cores', '-p',
+        '--cores', '-j',
         type=int,
         default=None,
         help='Number of cores to use for parallel processing (default: 1)'
@@ -1012,7 +1012,7 @@ Examples:
         help='Steps to run. If not present will use "loci_steps" from config. Use "fast" for accelerated mode, "all" or "default" for full pipeline, or a trailing + (e.g., split+) to run that step and all subsequent steps.'
     )
     parser_loci.add_argument(
-        '--cores', '-p',
+        '--cores', '-j',
         type=int,
         default=1,
         help='Parallel joblib workers for the fitness p-value resim (independent resims; default: 1)'
