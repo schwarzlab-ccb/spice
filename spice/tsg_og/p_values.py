@@ -258,11 +258,20 @@ def _gpd_upper_tail_p(obs, null, N_random, tail_q=0.90, min_exc=15):
     u = np.quantile(null, tail_q)
     exc = null[null > u] - u
     if len(exc) >= min_exc:
-        c, _, scale = stats.genpareto.fit(exc, floc=0)
-        frac_above = np.mean(null > u)
-        hi = obs > u
-        p[hi] = np.clip(frac_above * stats.genpareto.sf(obs[hi] - u, c, loc=0, scale=scale),
-                        np.finfo(float).tiny, 1.0)
+        # The GPD MLE can raise (non-convergence) or return non-finite/degenerate parameters for
+        # pathological exceedances (e.g. exactly-tied values -> constant `exc`). Either would other-
+        # wise crash the whole chromosome or write NaN into p_fitness_gpd (the PR-curve ranking
+        # column). The empirical `p` above is already a valid fallback, so on any failure keep it.
+        try:
+            c, _, scale = stats.genpareto.fit(exc, floc=0)
+            frac_above = np.mean(null > u)
+            hi = obs > u
+            p_hi = frac_above * stats.genpareto.sf(obs[hi] - u, c, loc=0, scale=scale)
+            if not (np.isfinite(scale) and scale > 0 and np.all(np.isfinite(p_hi))):
+                raise ValueError(f"non-finite GPD fit (c={c}, scale={scale})")
+            p[hi] = np.clip(p_hi, np.finfo(float).tiny, 1.0)
+        except Exception as e:
+            logger.warning(f"GPD tail fit failed ({e}); using empirical p-values for this track")
     return p
 
 

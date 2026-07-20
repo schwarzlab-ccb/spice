@@ -610,6 +610,12 @@ def main_loci_detection(args):
             raise ValueError(f'--chrom {args.chrom} not among detected chromosomes: {list(chromosomes)}')
         chromosomes = [args.chrom]
         logger.info(f'Restricting to a single chromosome (scatter unit): {args.chrom}')
+    # --chrom is a per-chromosome scatter unit (detection + p-value part); with 'combine' the loop
+    # below skips every chromosome and then returns early -> a green run that produces nothing.
+    # Reject it rather than silently no-op.
+    if args.chrom is not None and steps_to_run == "combine":
+        raise ValueError("--chrom runs one chromosome's detection + p-value part and is incompatible "
+                         "with --loci-steps combine (the cross-chromosome combine runs without --chrom).")
     calc_p = loci_params.get('calculate_p_value', True)
     N_random = args.n_random if args.n_random is not None else loci_params['p_values_N_random']
     n_iter_p = loci_params['p_values_N_iterations']
