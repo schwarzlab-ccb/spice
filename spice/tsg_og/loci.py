@@ -533,7 +533,7 @@ def assign_p_values(
 
     loci_df['p_value'] = false_discovery_control(loci_df['p_value_raw'].values)
     if statistic == 'fitness':
-        for ls in LENGTH_SCALE_NAMES:
-            loci_df[f'p_value_{ls}'] = false_discovery_control(loci_df[f'p_value_raw_{ls}'].values)
+        loci_df[[f'p_value_{ls}' for ls in LENGTH_SCALE_NAMES]] = np.reshape(false_discovery_control(
+            loci_df[[f'p_value_raw_{ls}' for ls in LENGTH_SCALE_NAMES]].values, axis=None), (-1, 4))
 
     return loci_df
