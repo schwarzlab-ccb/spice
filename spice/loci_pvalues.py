@@ -67,6 +67,18 @@ def compute_chrom_parts(cur_chrom, loci_results_dir, processed_events, N_random,
     is accepted for signature parity but not needed here (the fitness statistic reads only the
     fitness_* columns; no added_events)."""
     det = os.path.join(loci_results_dir, 'detection', cur_chrom)
+    # The fitness p-value needs a COMPLETED detection run: final_selection_points.pickle and
+    # final_loci_widths.pickle are written only by the terminal steps (final_limiting / final_loci_widths).
+    # A partial `--loci-steps` (a single/early step) leaves them absent; fail with an actionable message
+    # instead of an opaque FileNotFoundError from open_pickle below.
+    missing = [f for f in ('final_selection_points.pickle', 'final_loci_widths.pickle')
+               if not os.path.exists(os.path.join(det, f))]
+    if missing:
+        raise FileNotFoundError(
+            f"Cannot compute the fitness p-value for {cur_chrom}: missing {missing} in {det}. "
+            f"These are produced only by a complete detection run -- rerun loci detection with "
+            f"--loci-steps default (or a '<step>+' selection reaching the final steps), or set "
+            f"calculate_p_value: false in the loci config to skip the p-value.")
     sp = {cur_chrom: open_pickle(os.path.join(det, 'final_selection_points.pickle'))}
     widths = {cur_chrom: open_pickle(os.path.join(det, 'final_loci_widths.pickle'))}
     dpls = open_pickle(os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle'))

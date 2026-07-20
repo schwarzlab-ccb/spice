@@ -254,7 +254,10 @@ def _gpd_upper_tail_p(obs, null, N_random, tail_q=0.90, min_exc=15):
     without a normality assumption, so strong loci beyond the null's range get distinct p-values."""
     from scipy import stats
     null = np.asarray(null, float); obs = np.asarray(obs, float)
-    p = (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (N_random + 1)   # empirical body/fallback
+    # Denominator is the ACTUAL null size, not the requested N_random: a short/partial cache (fewer
+    # resims than N_random) would otherwise inflate the denominator and understate p (too significant).
+    n_null = len(null)
+    p = (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (n_null + 1)   # empirical body/fallback
     u = np.quantile(null, tail_q)
     exc = null[null > u] - u
     if len(exc) >= min_exc:
@@ -283,10 +286,12 @@ def get_actual_p_values_from_results(cur_loci, results, N_random, statistic='add
     key = 'fitness_stat' if statistic == 'fitness' else 'added_events'
     obs = _observed_statistic(cur_loci, statistic)
     null = np.array([x[key] for x in results])
+    # Use the actual null size (len(null) == len(results)); dividing by the requested N_random would
+    # understate p if a short/partial cache holds fewer resims than N_random.
     if method == 'gpd':
         return _gpd_upper_tail_p(obs, null, N_random)
     if method == 'empirical':
-        return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (N_random + 1)
+        return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (len(null) + 1)
     raise ValueError(f"unknown method {method!r} (expected 'empirical' or 'gpd')")
 
 
@@ -296,8 +301,9 @@ def get_actual_p_values_per_ls_from_results(cur_peaks, results, N_random):
     exceeds the observed per-length-scale fitness. Returns an (n_loci, len(LENGTH_SCALE_NAMES)) array,
     columns ordered as `LENGTH_SCALE_NAMES`."""
     obs = _observed_fitness_per_ls(cur_peaks)  # (n_loci, n_ls)
-    null = np.array([[x[f'fit_{ls}'] for ls in LENGTH_SCALE_NAMES] for x in results])  # (N_random, n_ls)
-    return (np.sum(obs[:, None, :] < null[None, :, :], axis=1) + 1) / (N_random + 1)
+    null = np.array([[x[f'fit_{ls}'] for ls in LENGTH_SCALE_NAMES] for x in results])  # (N_null, n_ls)
+    # Divide by the actual null size (null.shape[0] == len(results)), robust to a short/partial cache.
+    return (np.sum(obs[:, None, :] < null[None, :, :], axis=1) + 1) / (null.shape[0] + 1)
 
 
 def _observed_fitness_per_ls(cur_loci):
