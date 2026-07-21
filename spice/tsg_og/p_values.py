@@ -249,7 +249,7 @@ def get_actual_p_values_from_results(cur_loci, results, N_random):
     return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (len(null) + 1)
 
 
-def get_actual_p_values_per_ls_from_results(cur_peaks, results, N_random):
+def get_actual_p_values_per_ls_from_results(cur_peaks, results, _N_random):
     """Empirical upper-tail p per locus, per length scale, for the 'fitness' statistic: fraction of
     null resims whose per-length-scale fitness (`fit_<ls>` in `results`, from `p_value_using_resim`)
     exceeds the observed per-length-scale fitness. Returns an (n_loci, len(LENGTH_SCALE_NAMES)) array,
