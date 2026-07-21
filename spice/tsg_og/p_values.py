@@ -34,7 +34,7 @@ def p_value_using_resim(
         mode='random',
         n_iterations_optim=None,
         blocked_distance_th=2e5,
-        within_ci_filtering=True,
+        within_ci_filtering=False,
         log_progress=False,
         skip_tqdm=False,
         save_all=False,
