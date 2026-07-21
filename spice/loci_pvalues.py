@@ -1,7 +1,7 @@
 """Fitness p-value helpers for per-chromosome loci detection.
 
 Wired into `spice loci_detection`: each per-chromosome run emits a raw (pre-FDR) p-value part
-(`compute_chrom_parts`), and the combine step joins the parts by (chrom, rank_on_chrom) and applies
+(`compute_chrom_parts`), and the combine step joins the parts by (chrom, rank_on_chrom, type) and applies
 one global BH-FDR (`merge_parts`). A "track" is a loci `type` -- OG (gains) or TSG (losses). The
 actual p-value machinery lives in spice.tsg_og.p_values (null resim, empirical + GPD tail); this
 module is orchestration only.
@@ -98,7 +98,7 @@ def compute_chrom_parts(cur_chrom, loci_results_dir, processed_events, N_random,
 
 
 def merge_parts(loci_df, loci_results_dir, statistics=('fitness',), methods=('empirical', 'gpd')):
-    """Join the per-chromosome raw-p parts onto loci_df by (chrom, rank_on_chrom). For each
+    """Join the per-chromosome raw-p parts onto loci_df by (chrom, rank_on_chrom, type). For each
     (statistic, method) it keeps the raw p-value as p_<statistic>_<method> and adds the global
     BH-FDR q-value as q_<statistic>_<method>. Drops the intermediate *_raw columns. Leaves loci_df
     untouched if no parts are present."""
@@ -107,8 +107,13 @@ def merge_parts(loci_df, loci_results_dir, statistics=('fitness',), methods=('em
         return loci_df
     raw = pd.concat([pd.read_csv(f, sep='\t') for f in files], ignore_index=True)
     rawcols = [f'{s}_{m}_raw' for s in statistics for m in methods if f'{s}_{m}_raw' in raw.columns]
-    loci_df = loci_df.merge(raw[['chrom', 'rank_on_chrom'] + rawcols],
-                            on=['chrom', 'rank_on_chrom'], how='left')
+    # Join on the full documented key (chrom, rank_on_chrom, type). create_loci_df numbers all loci on
+    # a chromosome 0..n-1, so (chrom, rank_on_chrom) is unique across tracks today and type is redundant
+    # for matching -- but including it matches compute_chrom_parts' key (parts are built from the same
+    # selection points as the combine's loci_df, so type aligns row-for-row) and guards against silent
+    # row duplication should that numbering ever become per-track.
+    loci_df = loci_df.merge(raw[['chrom', 'rank_on_chrom', 'type'] + rawcols],
+                            on=['chrom', 'rank_on_chrom', 'type'], how='left')
     for s in statistics:
         for m in methods:
             col = f'{s}_{m}_raw'

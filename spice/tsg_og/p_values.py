@@ -258,6 +258,10 @@ def _gpd_upper_tail_p(obs, null, N_random, tail_q=0.90, min_exc=15):
     # resims than N_random) would otherwise inflate the denominator and understate p (too significant).
     n_null = len(null)
     p = (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (n_null + 1)   # empirical body/fallback
+    if n_null == 0:
+        # Empty null (e.g. an interrupted/empty cache): there is no tail to fit and np.quantile below
+        # would raise on an empty array -- return the empirical p (all 1.0) instead of crashing.
+        return p
     u = np.quantile(null, tail_q)
     exc = null[null > u] - u
     if len(exc) >= min_exc:
