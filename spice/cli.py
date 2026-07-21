@@ -619,13 +619,13 @@ def main_loci_detection(args):
     calc_p = loci_params.get('calculate_p_value', True)
     N_random = args.n_random if args.n_random is not None else loci_params['p_values_N_random']
     n_iter_p = loci_params['p_values_N_iterations']
-    p_value_mode = loci_params.get('p_values_mode', 'random')   # 'random' | 'top' (top mirrors detection)
-    p_value_statistic = loci_params.get('p_value_statistic', 'fitness')  # 'fitness' | 'added_events'
+    p_value_mode = loci_params.get('p_values_mode', 'top')   # 'random' | 'top' (top mirrors detection)
+    p_thresh = loci_params['p_value_threshold']              # loci with q_value >= this are dropped
     # Record the resim-null settings actually used this run, so each per-chromosome log names them
     # (which mode/N_iterations a completed run used is otherwise unrecoverable after the fact).
     if calc_p:
-        logger.info(f'{p_value_statistic} p-value (resim null): mode={p_value_mode}, '
-                    f'N_iterations_optim={n_iter_p}, N_random={N_random}')
+        logger.info(f'Fitness p-value (resim null): mode={p_value_mode}, N_iterations_optim={n_iter_p}, '
+                    f'N_random={N_random}; keeping loci with q_value < {p_thresh}')
     else:
         logger.info('Fitness p-value resim disabled (calculate_p_value=false)')
 
@@ -673,7 +673,7 @@ def main_loci_detection(args):
                 resim_null_for_chrom_type(chrom, cur_type, dpls, loci_results_dir,
                                           N_random, n_iter_p, mode=p_value_mode,
                                           overwrite=args.overwrite, n_jobs=args.cores)
-            logger.info(f'  warmed {p_value_statistic} p-value resim cache for {chrom}')
+            logger.info(f'  warmed fitness p-value resim cache for {chrom}')
 
     if args.chrom is not None:
         logger.info(f'Per-chromosome step for {args.chrom} complete (detection + p-value part); skipping combine.')
@@ -697,17 +697,17 @@ def main_loci_detection(args):
         p_values_N_iterations=loci_params['p_values_N_iterations'],
         post_p_value_N_iterations=loci_params['post_p_value_N_iterations'],
         p_value_threshold=loci_params['p_value_threshold'],
-        p_value_statistic=loci_params['p_value_statistic'],
         p_values_mode=loci_params['p_values_mode'],
         overwrite=args.overwrite,
         mode='detection'
     )
 
     # Fitness p-value on the COMBINED loci via the shared assign_p_values engine: it reuses the warm
-    # per-chromosome resim caches (no resim here), applies ONE global BH-FDR, honours p_value_statistic,
-    # computes per-length-scale p (for 'fitness'), and annotates every locus (no filtering). It names
+    # per-chromosome resim caches (no resim here) and applies ONE global BH-FDR. assign_p_values names
     # the raw p `p_value_raw` and the BH-FDR q `p_value`; remap to this table's canonical raw `p_value`
-    # / FDR `q_value` (+ the p_fitness_empirical / q_fitness_empirical aliases and per-length-scale p/q).
+    # and FDR `q_value` (+ per-length-scale raw `p_value_<ls>` / FDR `q_value_<ls>`). Then DROP loci
+    # with q_value >= p_value_threshold from the table AND the saved selection points / widths, so
+    # final_loci_detection.tsv and its pickles hold only the significant loci.
     if calc_p:
         from spice.utils import open_pickle
         from spice.tsg_og.loci import assign_p_values
@@ -719,17 +719,25 @@ def main_loci_detection(args):
         final_loci_df = assign_p_values(
             final_loci_df, N_random=N_random, n_iterations_optim=n_iter_p,
             output_dir=loci_results_dir, data_per_length_scale=dpls_all,
-            overwrite=False, statistic=p_value_statistic, mode=p_value_mode)
-        final_loci_df['q_value'] = final_loci_df['p_value']            # assign_p_values p_value = BH-FDR q
-        final_loci_df['p_value'] = final_loci_df.pop('p_value_raw')     # canonical p_value = raw (pre-FDR) p
-        final_loci_df[f'p_{p_value_statistic}_empirical'] = final_loci_df['p_value']
-        final_loci_df[f'q_{p_value_statistic}_empirical'] = final_loci_df['q_value']
-        if p_value_statistic == 'fitness':
-            for ls in LENGTH_SCALE_NAMES:
-                final_loci_df[f'p_fitness_empirical_{ls}'] = final_loci_df.pop(f'p_value_raw_{ls}')
-                final_loci_df[f'q_fitness_empirical_{ls}'] = final_loci_df.pop(f'p_value_{ls}')
-        logger.info(f'Assigned {p_value_statistic} p/q via assign_p_values (global BH-FDR; '
-                    f'p_value = raw, q_value = BH-FDR q; per-length-scale p/q restored)')
+            overwrite=False, mode=p_value_mode)
+        # assign_p_values: p_value_raw = raw p, p_value = BH-FDR q. Remap to canonical raw p / FDR q.
+        final_loci_df['q_value'] = final_loci_df['p_value']
+        final_loci_df['p_value'] = final_loci_df.pop('p_value_raw')
+        for ls in LENGTH_SCALE_NAMES:
+            final_loci_df[f'q_value_{ls}'] = final_loci_df.pop(f'p_value_{ls}')      # BH-FDR per scale
+            final_loci_df[f'p_value_{ls}'] = final_loci_df.pop(f'p_value_raw_{ls}')  # raw per scale
+        # Filter to significant loci (q_value < threshold): drop rows AND the matching selection points /
+        # widths (indexed per chromosome by rank_on_chrom, which numbers a chromosome's loci 0..n-1).
+        n_before = len(final_loci_df)
+        for cur_chrom in list(filtered_selection_points.keys()):
+            keep = final_loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom')['q_value'].to_numpy() < p_thresh
+            filtered_selection_points[cur_chrom] = [
+                [x for i, x in enumerate(track) if keep[i]] for track in filtered_selection_points[cur_chrom]]
+            filtered_loci_widths[cur_chrom] = [
+                x for i, x in enumerate(filtered_loci_widths[cur_chrom]) if keep[i]]
+        final_loci_df = final_loci_df[final_loci_df['q_value'] < p_thresh].reset_index(drop=True)
+        logger.info(f'Assigned fitness p/q via assign_p_values (global BH-FDR; p_value = raw, '
+                    f'q_value = BH-FDR q) and kept {len(final_loci_df)}/{n_before} loci with q_value < {p_thresh}')
 
     # Save final combined loci results
     final_loci_output_path = os.path.join(config['directories']['results_dir'], config['name'], 'final_loci_detection.tsv')

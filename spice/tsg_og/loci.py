@@ -490,11 +490,15 @@ def assign_p_values(
     output_dir=None,
     data_per_length_scale=None,
     overwrite=False,
-    statistic='added_events',
     mode='random',
     n_jobs=1,
 ):
-    """Assign p-values to loci, either loading from cache or calculating from scratch.
+    """Assign the FITNESS p-value to loci, loading the resim null from cache or computing it.
+
+    The tested statistic is the mean optimized fitness over the four same-direction length scales
+    (monotone in selection strength). Writes the raw (pre-FDR) p as `p_value_raw` and its BH-FDR
+    value as `p_value`, plus the per-length-scale raw/`p_value_raw_<ls>` and BH-FDR/`p_value_<ls>`
+    (the per-scale FDR is applied jointly across all scales).
 
     Args:
         loci_df: DataFrame with loci to assign p-values to
@@ -510,15 +514,11 @@ def assign_p_values(
         get_actual_p_values_from_results, get_actual_p_values_per_ls_from_results)
 
 
-    log_debug(logger, f'Assigning p-values to loci for {len(data_per_length_scale)} chromosomes with N_random={N_random}, n_iterations_optim={n_iterations_optim}, mode={mode}, overwrite={overwrite}')
-
-    assert statistic in ['added_events', 'fitness'], 'Parameter `statistic` has to be either "added_events" or "fitness"'
+    log_debug(logger, f'Assigning fitness p-values to loci for {len(data_per_length_scale)} chromosomes with N_random={N_random}, n_iterations_optim={n_iterations_optim}, mode={mode}, overwrite={overwrite}')
 
     loci_df['p_value_raw'] = 1
-    if statistic == 'fitness':
-        for ls in LENGTH_SCALE_NAMES:
-            loci_df[f'p_value_raw_{ls}'] = 1
-
+    for ls in LENGTH_SCALE_NAMES:
+        loci_df[f'p_value_raw_{ls}'] = 1
 
     for cur_chrom in data_per_length_scale.keys():
         for cur_type in ['OG', 'TSG']:
@@ -528,17 +528,15 @@ def assign_p_values(
 
             # Apply p-values to loci dataframe
             cur_loci = loci_df.query('chrom == @cur_chrom and type == @cur_type')
-            p_values = get_actual_p_values_from_results(cur_loci, p_value_results, N_random, statistic=statistic)
+            p_values = get_actual_p_values_from_results(cur_loci, p_value_results, N_random)
             loci_df.loc[cur_loci.index, 'p_value_raw'] = p_values
 
-            if statistic == 'fitness':
-                p_values_per_ls = get_actual_p_values_per_ls_from_results(cur_loci, p_value_results, N_random)
-                for i, ls in enumerate(LENGTH_SCALE_NAMES):
-                    loci_df.loc[cur_loci.index, f'p_value_raw_{ls}'] = p_values_per_ls[:, i]
+            p_values_per_ls = get_actual_p_values_per_ls_from_results(cur_loci, p_value_results, N_random)
+            for i, ls in enumerate(LENGTH_SCALE_NAMES):
+                loci_df.loc[cur_loci.index, f'p_value_raw_{ls}'] = p_values_per_ls[:, i]
 
     loci_df['p_value'] = false_discovery_control(loci_df['p_value_raw'].values)
-    if statistic == 'fitness':
-        loci_df[[f'p_value_{ls}' for ls in LENGTH_SCALE_NAMES]] = np.reshape(false_discovery_control(
-            loci_df[[f'p_value_raw_{ls}' for ls in LENGTH_SCALE_NAMES]].values, axis=None), (-1, 4))
+    loci_df[[f'p_value_{ls}' for ls in LENGTH_SCALE_NAMES]] = np.reshape(false_discovery_control(
+        loci_df[[f'p_value_raw_{ls}' for ls in LENGTH_SCALE_NAMES]].values, axis=None), (-1, 4))
 
     return loci_df

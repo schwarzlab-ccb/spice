@@ -238,23 +238,12 @@ def p_values_within_ci_filter(cur_chrom, optimized_selection_points, cur_resim, 
     return filtered_selection_points
 
 
-def _observed_statistic(cur_loci, statistic):
-    """Observed per-locus value of the chosen test statistic, matching the null construction."""
-    if statistic == 'added_events':
-        return cur_loci["added_events"].values
-    if statistic == 'fitness':
-        # same direction-matched mean-fitness as recorded in the null (clip <0 to 0)
-        return _observed_fitness_per_ls(cur_loci).mean(axis=1)
-    raise ValueError(f"unknown statistic {statistic!r} (expected 'added_events' or 'fitness')")
-
-
-def get_actual_p_values_from_results(cur_loci, results, N_random, statistic='added_events'):
-    """Empirical upper-tail p per locus vs the resim null (count; floors at 1/(N+1)). `statistic`
-    selects the tested quantity -- 'added_events' (SPICE default) or 'fitness' (monotone in
-    selection strength)."""
-    key = 'fitness_stat' if statistic == 'fitness' else 'added_events'
-    obs = _observed_statistic(cur_loci, statistic)
-    null = np.array([x[key] for x in results])
+def get_actual_p_values_from_results(cur_loci, results, N_random):
+    """Empirical upper-tail p per locus vs the resim null on the FITNESS statistic (mean optimized
+    fitness over the four same-direction length scales; monotone in selection strength). Count-based,
+    so it floors at 1/(N+1)."""
+    obs = _observed_fitness_per_ls(cur_loci).mean(axis=1)  # direction-matched mean fitness (clip <0 to 0)
+    null = np.array([x['fitness_stat'] for x in results])
     # Use the actual null size (len(null) == len(results)); dividing by the requested N_random would
     # understate p if a short/partial cache holds fewer resims than N_random.
     return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (len(null) + 1)
