@@ -46,8 +46,9 @@ def p_value_using_resim(
         cur_chrom: Chromosome to analyze
         cur_up_down: Either 'up' (gains) or 'down' (losses)
         N_test: Number of simulations to perform
-        mode: Either 'random' (uniformly random loci, the SPICE default) or 'top' (loci at the
-            position of the largest residual per resimulation, mirroring locus detection itself)
+        mode: Either 'random' (uniformly random loci) or 'top' (loci at the position of the largest
+            residual per resimulation, mirroring locus detection itself). The active mode is set by
+            configuration (p_values_mode), not defaulted here.
         n_iterations_optim: Number of optimization iterations (defaults: 1000 for 'random',
             5000 for 'top')
         n_jobs: parallelise the (independent) resims across this many joblib workers (each worker

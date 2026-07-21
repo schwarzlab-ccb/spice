@@ -522,12 +522,17 @@ def assign_p_values(
 
     for cur_chrom in data_per_length_scale.keys():
         for cur_type in ['OG', 'TSG']:
+            cur_loci = loci_df.query('chrom == @cur_chrom and type == @cur_type')
+            if len(cur_loci) == 0:
+                # No loci of this type on this chromosome: nothing to score, and the fitness statistic
+                # (get_actual_p_values_* -> _observed_fitness_per_ls) would index an empty frame. Skip
+                # before touching the resim null; these rows don't exist, so the init raw p=1 is moot.
+                continue
             p_value_results = resim_null_for_chrom_type(
                 cur_chrom, cur_type, data_per_length_scale[cur_chrom], output_dir,
                 N_random, n_iterations_optim, mode=mode, overwrite=overwrite, n_jobs=n_jobs)
 
             # Apply p-values to loci dataframe
-            cur_loci = loci_df.query('chrom == @cur_chrom and type == @cur_type')
             p_values = get_actual_p_values_from_results(cur_loci, p_value_results, N_random)
             loci_df.loc[cur_loci.index, 'p_value_raw'] = p_values
 
