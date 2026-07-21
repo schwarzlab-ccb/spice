@@ -616,7 +616,7 @@ def main_loci_detection(args):
     if args.chrom is not None and steps_to_run == "combine":
         raise ValueError("--chrom runs one chromosome's detection + p-value part and is incompatible "
                          "with --loci-steps combine (the cross-chromosome combine runs without --chrom).")
-    calc_p = loci_params['p_values_N_iterations']
+    calc_p = loci_params.get('calculate_p_value', True)
     p_values_N_random = loci_params['p_values_N_random']
     p_values_N_iterations = loci_params['p_values_N_iterations']
     p_value_mode = loci_params['p_values_mode']
