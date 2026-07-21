@@ -252,7 +252,7 @@ def get_actual_p_values_from_results(cur_loci, results, _N_random):
     null = np.array([x['fitness_stat'] for x in results])
     # Use the actual null size (len(null) == len(results)); dividing by the requested N_random would
     # understate p if a short/partial cache holds fewer resims than N_random.
-    return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (len(null) + 1)
+    return (np.sum(obs[:, None] <= null[None, :], axis=1) + 1) / (len(null) + 1)
 
 
 def get_actual_p_values_per_ls_from_results(cur_peaks, results, _N_random):
@@ -263,7 +263,7 @@ def get_actual_p_values_per_ls_from_results(cur_peaks, results, _N_random):
     obs = _observed_fitness_per_ls(cur_peaks)  # (n_loci, n_ls)
     null = np.array([[x[f'fit_{ls}'] for ls in LENGTH_SCALE_NAMES] for x in results])  # (N_null, n_ls)
     # Divide by the actual null size (null.shape[0] == len(results)), robust to a short/partial cache.
-    return (np.sum(obs[:, None, :] < null[None, :, :], axis=1) + 1) / (null.shape[0] + 1)
+    return (np.sum(obs[:, None, :] <= null[None, :, :], axis=1) + 1) / (null.shape[0] + 1)
 
 
 def _observed_fitness_per_ls(cur_loci):
