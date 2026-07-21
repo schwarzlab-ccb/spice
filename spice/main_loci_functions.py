@@ -984,7 +984,8 @@ def loci_assignment(
     post_p_value_N_iterations: int = 25_000,
     p_values_mode: str = 'random',
     overwrite: bool = False,
-    overwrite_preprocessing: bool = False
+    overwrite_preprocessing: bool = False,
+    calculate_p_value: bool = True,
 ):
     """
     Assign fitness values to pre-defined loci positions.
@@ -1101,7 +1102,7 @@ def loci_assignment(
         p_values_N_iterations=p_values_N_iterations,
         post_p_value_N_iterations=post_p_value_N_iterations,
         p_values_mode=p_values_mode,
-        calculate_p_value=False,
+        calculate_p_value=calculate_p_value,
         overwrite=overwrite,
         mode='assignment'
         ###
