@@ -60,11 +60,6 @@ pip install -e .
 
 ### 0.4 Optional Dependencies
 
-To use SPICE with Snakemake for parallel execution on computing clusters, install snakemake separately:
-```bash
-conda install bioconda::snakemake
-```
-
 To use the extra preprocessing also install CNSistent:
 ```bash
 pip install CNSistent
@@ -124,8 +119,6 @@ spice loci_assignment --config configs/loci_example.yaml
 # Plotting
 spice plotting --config <path/to/config> --plot-events-per-sample <SAMPLE_ID>
 ```
-
-For large datasets, we recommend using Snakemake mode on a computing cluster (see respective sections below).
 
 ---
 

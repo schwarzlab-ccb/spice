@@ -1,4 +1,5 @@
 import gc
+import os
 import logging
 from tqdm.auto import tqdm
 from copy import deepcopy
@@ -7,7 +8,7 @@ import numpy as np
 from joblib import Parallel, delayed
 
 from spice import data_loaders
-from spice.utils import get_logger
+from spice.utils import get_logger, open_pickle, save_pickle
 from spice.segmentation import get_events_at_position_all_ls
 from spice.tsg_og.simulation import resimulate_events_multiple, copy_list_of_selection_points
 from spice.tsg_og.detection import (
@@ -74,13 +75,15 @@ def p_value_using_resim(
         centromere_block_end = int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end'] + tel_cen_distance_th) / segment_size_dict['small'])
 
     def _run_one_resim(iteration):
-        # Deterministic per-resim seed on the GLOBAL numpy RNG (the resim + optimize stack --
-        # resimulate_events_multiple, the detection MCMC, the positional sampling below -- all draw
-        # from np.random, so seeding it is what controls them). This is only correct under a PROCESS
-        # backend (loky/multiprocessing), where each worker has its own global RNG: workers then draw
-        # independent, reproducible nulls (direction offset keeps the gain/loss tracks independent).
-        # Under a THREADING backend the global RNG is shared and np.random.seed() races across
-        # threads -> correlated/duplicated nulls, so the Parallel() below pins backend='loky'.
+        '''
+        Deterministic per-resim seed on the GLOBAL numpy RNG (the resim + optimize stack --
+        resimulate_events_multiple, the detection MCMC, the positional sampling below -- all draw
+        from np.random, so seeding it is what controls them). This is only correct under a PROCESS
+        backend (loky/multiprocessing), where each worker has its own global RNG: workers then draw
+        independent, reproducible nulls (direction offset keeps the gain/loss tracks independent).
+        Under a THREADING backend the global RNG is shared and np.random.seed() races across
+        threads -> correlated/duplicated nulls, so the Parallel() below pins backend='loky'.
+        '''
         np.random.seed(int(iteration) + (0 if cur_up_down == 'up' else 5_000_000))
         if log_progress:
             logger.info(f'Starting iteration {iteration+1} / {N_test}')
@@ -119,7 +122,7 @@ def p_value_using_resim(
             cur_residuals_abs_sum[np.all(np.stack(ci_up), axis=0).astype(bool)] = 0
 
             cur_pos = np.argmax(cur_residuals_abs_sum) * segment_size_dict['small']
-        else:  # mode == 'random'
+        elif mode == 'random':
             p_arm_length = CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_start']
             q_arm_length = (CHROM_LENS.loc[cur_chrom] -
                             CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end'])
@@ -132,6 +135,8 @@ def p_value_using_resim(
                 cur_pos = np.random.randint(
                     CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end']+1e6,
                     CHROM_LENS.loc[cur_chrom]-1e6)
+        else:
+            raise ValueError(f"Unsupported mode: {mode}")
 
         data_per_length_scale_ = deepcopy(data_per_length_scale)
         for key, i in LS_I_DICT.items():
@@ -269,3 +274,26 @@ def _observed_fitness_per_ls(cur_loci):
     # clip <0 like the null construction (raw fitness can be negative; the old pre-clipped fit_<i>
     # columns this was written for no longer exist in create_loci_df's fitness_<scale>_<dir> schema)
     return np.maximum(0.0, cur_loci[cols].to_numpy(float))  # (n_loci, len(LENGTH_SCALE_NAMES))
+
+
+def resim_null_for_chrom_type(cur_chrom, cur_type, data_per_length_scale, output_dir,
+                              N_random, n_iterations_optim, mode='random', overwrite=False, n_jobs=1):
+    """Load-or-compute (and cache) the resimulation null for one (chrom, type). The cache key is
+    shared by every fitness p-value consumer -- assign_p_values (below) and the per-chromosome
+    scatter that warms it -- so warming the caches in parallel lets the combine's assign_p_values
+    reuse the nulls without re-simulating. `data_per_length_scale` is one chromosome's dict."""
+    from spice.tsg_og.p_values import p_value_using_resim
+    cache = os.path.join(
+        output_dir, 'p_values',
+        f'{cur_chrom}_{cur_type}_N_random_{N_random}_N_optim_{n_iterations_optim}_mode_{mode}.pickle')
+    if not overwrite and os.path.exists(cache):
+        logger.info(f"Loading p-values for {cur_chrom} ({cur_type}) from cache")
+        return open_pickle(cache)
+    logger.info(f"Calculating p-value distribution for {cur_chrom} ({cur_type})")
+    results = p_value_using_resim(
+        cur_chrom=cur_chrom, cur_up_down='up' if cur_type == 'OG' else 'down', N_test=N_random,
+        data_per_length_scale=data_per_length_scale, n_iterations_optim=n_iterations_optim,
+        mode=mode, n_jobs=n_jobs)
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    save_pickle(results, cache)
+    return results

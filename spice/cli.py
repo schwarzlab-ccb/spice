@@ -9,7 +9,8 @@ import re
 
 # Import base package only; defer submodule imports until after config is loaded
 import spice
-from spice.utils import save_pickle
+from spice.utils import save_pickle, open_pickle
+# No other SPICE imports here!
 
 
 def main_event_inference(args):
@@ -447,7 +448,6 @@ def main_plotting(args):
         fig.savefig(out_path, bbox_inches='tight')
         logger.info(f'Saved plot to {out_path}')
     elif args.plot_loci_on_chrom is not None:
-        from spice.utils import open_pickle
         from spice.tsg_og.detection import convolution_simulation_per_ls
         
         cur_chrom = args.plot_loci_on_chrom
@@ -616,16 +616,14 @@ def main_loci_detection(args):
     if args.chrom is not None and steps_to_run == "combine":
         raise ValueError("--chrom runs one chromosome's detection + p-value part and is incompatible "
                          "with --loci-steps combine (the cross-chromosome combine runs without --chrom).")
-    calc_p = loci_params.get('calculate_p_value', True)
-    N_random = args.n_random if args.n_random is not None else loci_params['p_values_N_random']
-    n_iter_p = loci_params['p_values_N_iterations']
-    p_value_mode = loci_params.get('p_values_mode', 'top')   # 'random' | 'top' (top mirrors detection)
-    p_thresh = loci_params['p_value_threshold']              # loci with q_value >= this are dropped
-    # Record the resim-null settings actually used this run, so each per-chromosome log names them
-    # (which mode/N_iterations a completed run used is otherwise unrecoverable after the fact).
+    calc_p = loci_params['p_values_N_iterations']
+    p_values_N_random = loci_params['p_values_N_random']
+    p_values_N_iterations = loci_params['p_values_N_iterations']
+    p_value_mode = loci_params['p_values_mode']
+    p_thresh = loci_params['p_value_threshold'] # loci with q_value >= this are dropped
     if calc_p:
-        logger.info(f'Fitness p-value (resim null): mode={p_value_mode}, N_iterations_optim={n_iter_p}, '
-                    f'N_random={N_random}; keeping loci with q_value < {p_thresh}')
+        logger.info(f'Fitness p-value (resim null): mode={p_value_mode}, N_iterations_optim={p_values_N_iterations}, '
+                    f'N_random={p_values_N_random}; keeping loci with q_value < {p_thresh}')
     else:
         logger.info('Fitness p-value resim disabled (calculate_p_value=false)')
 
@@ -666,12 +664,11 @@ def main_loci_detection(args):
         if calc_p:
             # Warm the resim-null cache for this chromosome (both tracks) in parallel. The combine's
             # assign_p_values shares this cache key, so it reuses these nulls and never re-simulates.
-            from spice.utils import open_pickle
-            from spice.tsg_og.loci import resim_null_for_chrom_type
+            from spice.tsg_og.p_values import resim_null_for_chrom_type
             dpls = open_pickle(os.path.join(loci_results_dir, 'data_per_length_scale', f'{chrom}.pickle'))
             for cur_type in ('OG', 'TSG'):
                 resim_null_for_chrom_type(chrom, cur_type, dpls, loci_results_dir,
-                                          N_random, n_iter_p, mode=p_value_mode,
+                                          p_values_N_random, p_values_N_iterations, mode=p_value_mode,
                                           overwrite=args.overwrite, n_jobs=args.cores)
             logger.info(f'  warmed fitness p-value resim cache for {chrom}')
 
@@ -684,60 +681,21 @@ def main_loci_detection(args):
         logger.warning("Loci detection steps do not include 'combine'. Final combination of loci across chromosomes will be skipped.")
         return
 
-    # Combine results from all chromosomes. The old added_events p-value path is disabled
-    # (calculate_p_value=False); the p-value is the FITNESS one, assembled from the per-chromosome
-    # raw-p parts + one global BH-FDR below.
+    # Combine results from all chromosomes
     logger.info('Combining all loci detection results across chromosomes')
-    from spice.main_loci_functions import combine_loci
+    from spice.main_loci_functions import combine_loci # has to be imported here
     final_loci_df, filtered_selection_points, filtered_loci_widths = combine_loci(
         loci_results_dir=loci_results_dir,
         processed_events=processed_events,
-        calculate_p_value=False,
+        calculate_p_value=calc_p,
         p_values_N_random=loci_params['p_values_N_random'],
         p_values_N_iterations=loci_params['p_values_N_iterations'],
-        post_p_value_N_iterations=loci_params['post_p_value_N_iterations'],
         p_value_threshold=loci_params['p_value_threshold'],
         p_values_mode=loci_params['p_values_mode'],
+        p_value_cores=args.cores,
         overwrite=args.overwrite,
         mode='detection'
     )
-
-    # Fitness p-value on the COMBINED loci via the shared assign_p_values engine: it reuses the warm
-    # per-chromosome resim caches (no resim here) and applies ONE global BH-FDR. assign_p_values names
-    # the raw p `p_value_raw` and the BH-FDR q `p_value`; remap to this table's canonical raw `p_value`
-    # and FDR `q_value` (+ per-length-scale raw `p_value_<ls>` / FDR `q_value_<ls>`). Then DROP loci
-    # with q_value >= p_value_threshold from the table AND the saved selection points / widths, so
-    # final_loci_detection.tsv and its pickles hold only the significant loci.
-    if calc_p:
-        from spice.utils import open_pickle
-        from spice.tsg_og.loci import assign_p_values
-        from spice.length_scales import LENGTH_SCALE_NAMES
-        dpls_dir = os.path.join(loci_results_dir, 'data_per_length_scale')
-        dpls_all = {c: open_pickle(os.path.join(dpls_dir, f'{c}.pickle'))
-                    for c in final_loci_df['chrom'].unique()
-                    if os.path.exists(os.path.join(dpls_dir, f'{c}.pickle'))}
-        final_loci_df = assign_p_values(
-            final_loci_df, N_random=N_random, n_iterations_optim=n_iter_p,
-            output_dir=loci_results_dir, data_per_length_scale=dpls_all,
-            overwrite=False, mode=p_value_mode, n_jobs=args.cores)
-        # assign_p_values: p_value_raw = raw p, p_value = BH-FDR q. Remap to canonical raw p / FDR q.
-        final_loci_df['q_value'] = final_loci_df['p_value']
-        final_loci_df['p_value'] = final_loci_df.pop('p_value_raw')
-        for ls in LENGTH_SCALE_NAMES:
-            final_loci_df[f'q_value_{ls}'] = final_loci_df.pop(f'p_value_{ls}')      # BH-FDR per scale
-            final_loci_df[f'p_value_{ls}'] = final_loci_df.pop(f'p_value_raw_{ls}')  # raw per scale
-        # Filter to significant loci (q_value < threshold): drop rows AND the matching selection points /
-        # widths (indexed per chromosome by rank_on_chrom, which numbers a chromosome's loci 0..n-1).
-        n_before = len(final_loci_df)
-        for cur_chrom in list(filtered_selection_points.keys()):
-            keep = final_loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom')['q_value'].to_numpy() < p_thresh
-            filtered_selection_points[cur_chrom] = [
-                [x for i, x in enumerate(track) if keep[i]] for track in filtered_selection_points[cur_chrom]]
-            filtered_loci_widths[cur_chrom] = [
-                x for i, x in enumerate(filtered_loci_widths[cur_chrom]) if keep[i]]
-        final_loci_df = final_loci_df[final_loci_df['q_value'] < p_thresh].reset_index(drop=True)
-        logger.info(f'Assigned fitness p/q via assign_p_values (global BH-FDR; p_value = raw, '
-                    f'q_value = BH-FDR q) and kept {len(final_loci_df)}/{n_before} loci with q_value < {p_thresh}')
 
     # Save final combined loci results
     final_loci_output_path = os.path.join(config['directories']['results_dir'], config['name'], 'final_loci_detection.tsv')
@@ -809,8 +767,8 @@ def main_loci_assignment(args):
         calculate_p_value=loci_params['calculate_p_value'],
         p_values_N_random=loci_params['p_values_N_random'],
         p_values_N_iterations=loci_params['p_values_N_iterations'],
-        post_p_value_N_iterations=loci_params['post_p_value_N_iterations'],
         p_values_mode=loci_params['p_values_mode'],
+        p_value_threshold=loci_params['p_value_threshold'],
         overwrite=args.overwrite,
         overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
     )
@@ -1078,10 +1036,6 @@ Examples:
         default=None,
         help='Run detection + the per-chromosome fitness p-value for this one chromosome only '
              '(a parallel scatter unit); skips the cross-chromosome combine.'
-    )
-    parser_loci.add_argument(
-        '--n-random', dest='n_random', type=int, default=None,
-        help='resim iterations for the fitness p-value (default: config p_values_N_random)'
     )
     parser_loci.set_defaults(func=main_loci_detection)
 

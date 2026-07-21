@@ -16,6 +16,7 @@ from spice.length_scales import DEFAULT_SEGMENT_SIZE_DICT, LENGTH_SCALE_NAMES, L
 from spice.tsg_og.simulation import (
     convolution_simulation, SelectionPoints, combine_selection_points)
 from spice.tsg_og.event_rate_per_loci import calc_total_events_per_loci
+from spice.tsg_og.p_values import resim_null_for_chrom_type
 
 CENTROMERES = data_loaders.load_centromeres(extended=False, observed=False)
 CHROMS = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
@@ -458,29 +459,6 @@ def calc_overlap_pairs(loci_1, loci_2):
         cur_dist_[:, min_j] = np.inf
         cur_pairs.append((min_i, min_j))
     return np.array(cur_pairs)
-
-
-def resim_null_for_chrom_type(cur_chrom, cur_type, data_per_length_scale, output_dir,
-                              N_random, n_iterations_optim, mode='random', overwrite=False, n_jobs=1):
-    """Load-or-compute (and cache) the resimulation null for one (chrom, type). The cache key is
-    shared by every fitness p-value consumer -- assign_p_values (below) and the per-chromosome
-    scatter that warms it -- so warming the caches in parallel lets the combine's assign_p_values
-    reuse the nulls without re-simulating. `data_per_length_scale` is one chromosome's dict."""
-    from spice.tsg_og.p_values import p_value_using_resim
-    cache = os.path.join(
-        output_dir, 'p_values',
-        f'{cur_chrom}_{cur_type}_N_random_{N_random}_N_optim_{n_iterations_optim}_mode_{mode}.pickle')
-    if not overwrite and os.path.exists(cache):
-        logger.info(f"Loading p-values for {cur_chrom} ({cur_type}) from cache")
-        return open_pickle(cache)
-    logger.info(f"Calculating p-value distribution for {cur_chrom} ({cur_type})")
-    results = p_value_using_resim(
-        cur_chrom=cur_chrom, cur_up_down='up' if cur_type == 'OG' else 'down', N_test=N_random,
-        data_per_length_scale=data_per_length_scale, n_iterations_optim=n_iterations_optim,
-        mode=mode, n_jobs=n_jobs)
-    os.makedirs(os.path.dirname(cache), exist_ok=True)
-    save_pickle(results, cache)
-    return results
 
 
 def assign_p_values(

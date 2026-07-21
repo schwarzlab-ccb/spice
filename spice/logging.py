@@ -3,6 +3,8 @@ import os
 from datetime import datetime
 import yaml
 
+# No SPICE imports here!
+
 # Global logging configuration (set by CLI or defaults)
 _LOGGING_CONFIG = {
     'mode': 'terminal',  # 'terminal', 'file', or 'both'

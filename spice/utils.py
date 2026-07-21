@@ -14,6 +14,8 @@ import pandas as pd
 import numpy as np
 
 from spice.logging import get_logger, log_debug
+# No other SPICE imports here!
+
 
 def chrom_id_from_id(cur_id):
     return re.sub(r':cn_[ab](:\d+$)?', '', cur_id)
@@ -50,14 +52,10 @@ class CALC_NEW_SKIP():
 
 
 class CALC_NEW:
-    def __init__(self, filename=None, force_new=False, verbose=True):
+    def __init__(self, filename=None, force_new=False, verbose=False):
         self.filename = filename
         self.force_new = force_new
         self.logger = get_logger('CALC_NEW')
-        # Respect the globally configured level (get_logger already applied it from the CLI's
-        # --log/--debug). Previously verbose=True force-pinned this shared logger to DEBUG, which
-        # flooded the logs with "File path is None, ignoring calc_new" even at INFO. verbose=False can
-        # still explicitly quiet it to WARNING; the default leaves the configured level untouched.
         if not verbose:
             self.logger.setLevel(logging.WARNING)
 

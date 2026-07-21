@@ -68,7 +68,6 @@ loci_detection:
   # Loci combination and scoring parameters
   p_values_N_random: 1000 # Number of random samples for p-value calculation
   p_values_N_iterations: 100 # Number of optimization iterations for p-value calculations
-  post_p_value_N_iterations: 250 # Number of optimization iterations after p-value filtering
   calculate_p_value: True # Whether to calculate p-values from scratch (if False, load from cache)
   p_value_threshold: 0.05 # Loci with q_value (BH-FDR fitness p) >= this are dropped from the output
   p_values_mode: 'top' # How resimulation loci are chosen for p-value calculation ('random' or 'top')

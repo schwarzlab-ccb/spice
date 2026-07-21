@@ -9,5 +9,7 @@ directories:
 loci_detection:
   N_loci: 10
   th_locus_prominence: 1 # Needs to be this low because we do not have enough data
+  p_values_N_random: 100 # Low so it is fast
+  p_value_threshold: 1
 
 note: 'Example configuration for loci detection and assignment'
