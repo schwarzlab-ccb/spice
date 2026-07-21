@@ -727,6 +727,7 @@ def main_loci_assignment(args):
         N_kernel=loci_params['N_kernel'],
         within_ci_N_iterations=loci_params['loci_assignment_within_ci_N_iterations'],
         N_iterations_optim=loci_params['loci_assignment_N_iterations'],
+        calculate_p_value=loci_params['calculate_p_value'],
         p_values_N_random=loci_params['p_values_N_random'],
         p_values_N_iterations=loci_params['p_values_N_iterations'],
         post_p_value_N_iterations=loci_params['post_p_value_N_iterations'],
