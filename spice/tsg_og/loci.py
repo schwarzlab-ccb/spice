@@ -460,6 +460,29 @@ def calc_overlap_pairs(loci_1, loci_2):
     return np.array(cur_pairs)
 
 
+def resim_null_for_chrom_type(cur_chrom, cur_type, data_per_length_scale, output_dir,
+                              N_random, n_iterations_optim, mode='random', overwrite=False, n_jobs=1):
+    """Load-or-compute (and cache) the resimulation null for one (chrom, type). The cache key is
+    shared by every fitness p-value consumer -- assign_p_values (below) and the per-chromosome
+    scatter that warms it -- so warming the caches in parallel lets the combine's assign_p_values
+    reuse the nulls without re-simulating. `data_per_length_scale` is one chromosome's dict."""
+    from spice.tsg_og.p_values import p_value_using_resim
+    cache = os.path.join(
+        output_dir, 'p_values',
+        f'{cur_chrom}_{cur_type}_N_random_{N_random}_N_optim_{n_iterations_optim}_mode_{mode}.pickle')
+    if not overwrite and os.path.exists(cache):
+        logger.info(f"Loading p-values for {cur_chrom} ({cur_type}) from cache")
+        return open_pickle(cache)
+    logger.info(f"Calculating p-value distribution for {cur_chrom} ({cur_type})")
+    results = p_value_using_resim(
+        cur_chrom=cur_chrom, cur_up_down='up' if cur_type == 'OG' else 'down', N_test=N_random,
+        data_per_length_scale=data_per_length_scale, n_iterations_optim=n_iterations_optim,
+        mode=mode, n_jobs=n_jobs)
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    save_pickle(results, cache)
+    return results
+
+
 def assign_p_values(
     loci_df,
     N_random=10_000,
@@ -469,6 +492,7 @@ def assign_p_values(
     overwrite=False,
     statistic='added_events',
     mode='random',
+    n_jobs=1,
 ):
     """Assign p-values to loci, either loading from cache or calculating from scratch.
 
@@ -480,9 +504,10 @@ def assign_p_values(
         data_per_length_scale: Data per length scale (required if overwrite=True)
         overwrite: If True, recalculate p-values from scratch. If False, load from cache.
         mode: Resimulation-locus selection mode passed to p_value_using_resim ('random' or 'top')
+        n_jobs: joblib workers for any resim that isn't already cached (default 1)
     """
     from spice.tsg_og.p_values import (
-        p_value_using_resim, get_actual_p_values_from_results, get_actual_p_values_per_ls_from_results)
+        get_actual_p_values_from_results, get_actual_p_values_per_ls_from_results)
 
 
     log_debug(logger, f'Assigning p-values to loci for {len(data_per_length_scale)} chromosomes with N_random={N_random}, n_iterations_optim={n_iterations_optim}, mode={mode}, overwrite={overwrite}')
@@ -497,30 +522,10 @@ def assign_p_values(
 
     for cur_chrom in data_per_length_scale.keys():
         for cur_type in ['OG', 'TSG']:
-            # Create cache filename
-            p_values_cache_file = os.path.join(
-                output_dir, 'p_values',
-                f'{cur_chrom}_{cur_type}_N_random_{N_random}_N_optim_{n_iterations_optim}_mode_{mode}.pickle'
-            )
+            p_value_results = resim_null_for_chrom_type(
+                cur_chrom, cur_type, data_per_length_scale[cur_chrom], output_dir,
+                N_random, n_iterations_optim, mode=mode, overwrite=overwrite, n_jobs=n_jobs)
 
-            # Load or calculate p-value results
-            if overwrite or not os.path.exists(p_values_cache_file):
-                logger.info(f"Calculating p-value distribution for {cur_chrom} ({cur_type})")
-                p_value_results = p_value_using_resim(
-                    cur_chrom=cur_chrom,
-                    cur_up_down='up' if cur_type == 'OG' else 'down',
-                    N_test=N_random,
-                    data_per_length_scale=data_per_length_scale[cur_chrom],
-                    n_iterations_optim=n_iterations_optim,
-                    mode=mode,
-                )
-                # Save to cache
-                os.makedirs(os.path.dirname(p_values_cache_file), exist_ok=True)
-                save_pickle(p_value_results, p_values_cache_file)
-            else:
-                logger.info(f"Loading p-values for {cur_chrom} ({cur_type}) from cache")
-                p_value_results = open_pickle(p_values_cache_file)
-            
             # Apply p-values to loci dataframe
             cur_loci = loci_df.query('chrom == @cur_chrom and type == @cur_type')
             p_values = get_actual_p_values_from_results(cur_loci, p_value_results, N_random, statistic=statistic)

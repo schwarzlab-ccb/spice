@@ -620,10 +620,11 @@ def main_loci_detection(args):
     N_random = args.n_random if args.n_random is not None else loci_params['p_values_N_random']
     n_iter_p = loci_params['p_values_N_iterations']
     p_value_mode = loci_params.get('p_values_mode', 'random')   # 'random' | 'top' (top mirrors detection)
+    p_value_statistic = loci_params.get('p_value_statistic', 'fitness')  # 'fitness' | 'added_events'
     # Record the resim-null settings actually used this run, so each per-chromosome log names them
     # (which mode/N_iterations a completed run used is otherwise unrecoverable after the fact).
     if calc_p:
-        logger.info(f'Fitness p-value (resim null): mode={p_value_mode}, '
+        logger.info(f'{p_value_statistic} p-value (resim null): mode={p_value_mode}, '
                     f'N_iterations_optim={n_iter_p}, N_random={N_random}')
     else:
         logger.info('Fitness p-value resim disabled (calculate_p_value=false)')
@@ -663,11 +664,16 @@ def main_loci_detection(args):
             th_locus_prominence=loci_params['th_locus_prominence'],
         )
         if calc_p:
-            from spice.loci_pvalues import compute_chrom_parts
-            compute_chrom_parts(chrom, loci_results_dir, processed_events, N_random=N_random,
-                                n_iterations_optim=n_iter_p, statistics=('fitness',),
-                                overwrite=args.overwrite, mode=p_value_mode, n_jobs=args.cores)
-            logger.info(f'  computed per-chromosome fitness p-value part for {chrom}')
+            # Warm the resim-null cache for this chromosome (both tracks) in parallel. The combine's
+            # assign_p_values shares this cache key, so it reuses these nulls and never re-simulates.
+            from spice.utils import open_pickle
+            from spice.tsg_og.loci import resim_null_for_chrom_type
+            dpls = open_pickle(os.path.join(loci_results_dir, 'data_per_length_scale', f'{chrom}.pickle'))
+            for cur_type in ('OG', 'TSG'):
+                resim_null_for_chrom_type(chrom, cur_type, dpls, loci_results_dir,
+                                          N_random, n_iter_p, mode=p_value_mode,
+                                          overwrite=args.overwrite, n_jobs=args.cores)
+            logger.info(f'  warmed {p_value_statistic} p-value resim cache for {chrom}')
 
     if args.chrom is not None:
         logger.info(f'Per-chromosome step for {args.chrom} complete (detection + p-value part); skipping combine.')
@@ -697,17 +703,33 @@ def main_loci_detection(args):
         mode='detection'
     )
 
-    # Fitness p-value: join the per-chromosome raw-p parts and one global BH-FDR. Expose the raw
-    # empirical fitness p as the canonical `p_value` and its BH-FDR value as `q_value`.
+    # Fitness p-value on the COMBINED loci via the shared assign_p_values engine: it reuses the warm
+    # per-chromosome resim caches (no resim here), applies ONE global BH-FDR, honours p_value_statistic,
+    # computes per-length-scale p (for 'fitness'), and annotates every locus (no filtering). It names
+    # the raw p `p_value_raw` and the BH-FDR q `p_value`; remap to this table's canonical raw `p_value`
+    # / FDR `q_value` (+ the p_fitness_empirical / q_fitness_empirical aliases and per-length-scale p/q).
     if calc_p:
-        from spice.loci_pvalues import merge_parts
-        final_loci_df = merge_parts(final_loci_df, loci_results_dir, statistics=('fitness',))
-        if 'p_fitness_empirical' in final_loci_df.columns:
-            final_loci_df['p_value'] = final_loci_df['p_fitness_empirical']   # raw (pre-FDR) p
-        if 'q_fitness_empirical' in final_loci_df.columns:
-            final_loci_df['q_value'] = final_loci_df['q_fitness_empirical']   # BH-FDR q
-        logger.info('Assigned fitness p/q (p_value = raw p_fitness_empirical, q_value = BH-FDR '
-                    'q_fitness_empirical)')
+        from spice.utils import open_pickle
+        from spice.tsg_og.loci import assign_p_values
+        from spice.length_scales import LENGTH_SCALE_NAMES
+        dpls_dir = os.path.join(loci_results_dir, 'data_per_length_scale')
+        dpls_all = {c: open_pickle(os.path.join(dpls_dir, f'{c}.pickle'))
+                    for c in final_loci_df['chrom'].unique()
+                    if os.path.exists(os.path.join(dpls_dir, f'{c}.pickle'))}
+        final_loci_df = assign_p_values(
+            final_loci_df, N_random=N_random, n_iterations_optim=n_iter_p,
+            output_dir=loci_results_dir, data_per_length_scale=dpls_all,
+            overwrite=False, statistic=p_value_statistic, mode=p_value_mode)
+        final_loci_df['q_value'] = final_loci_df['p_value']            # assign_p_values p_value = BH-FDR q
+        final_loci_df['p_value'] = final_loci_df.pop('p_value_raw')     # canonical p_value = raw (pre-FDR) p
+        final_loci_df[f'p_{p_value_statistic}_empirical'] = final_loci_df['p_value']
+        final_loci_df[f'q_{p_value_statistic}_empirical'] = final_loci_df['q_value']
+        if p_value_statistic == 'fitness':
+            for ls in LENGTH_SCALE_NAMES:
+                final_loci_df[f'p_fitness_empirical_{ls}'] = final_loci_df.pop(f'p_value_raw_{ls}')
+                final_loci_df[f'q_fitness_empirical_{ls}'] = final_loci_df.pop(f'p_value_{ls}')
+        logger.info(f'Assigned {p_value_statistic} p/q via assign_p_values (global BH-FDR; '
+                    f'p_value = raw, q_value = BH-FDR q; per-length-scale p/q restored)')
 
     # Save final combined loci results
     final_loci_output_path = os.path.join(config['directories']['results_dir'], config['name'], 'final_loci_detection.tsv')
