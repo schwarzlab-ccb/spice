@@ -719,7 +719,7 @@ def main_loci_detection(args):
         final_loci_df = assign_p_values(
             final_loci_df, N_random=N_random, n_iterations_optim=n_iter_p,
             output_dir=loci_results_dir, data_per_length_scale=dpls_all,
-            overwrite=False, mode=p_value_mode)
+            overwrite=False, mode=p_value_mode, n_jobs=args.cores)
         # assign_p_values: p_value_raw = raw p, p_value = BH-FDR q. Remap to canonical raw p / FDR q.
         final_loci_df['q_value'] = final_loci_df['p_value']
         final_loci_df['p_value'] = final_loci_df.pop('p_value_raw')
