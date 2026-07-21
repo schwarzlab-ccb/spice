@@ -666,8 +666,7 @@ def main_loci_detection(args):
             from spice.loci_pvalues import compute_chrom_parts
             compute_chrom_parts(chrom, loci_results_dir, processed_events, N_random=N_random,
                                 n_iterations_optim=n_iter_p, statistics=('fitness',),
-                                methods=('empirical', 'gpd'), overwrite=args.overwrite,
-                                mode=p_value_mode, n_jobs=args.cores)
+                                overwrite=args.overwrite, mode=p_value_mode, n_jobs=args.cores)
             logger.info(f'  computed per-chromosome fitness p-value part for {chrom}')
 
     if args.chrom is not None:
@@ -698,19 +697,17 @@ def main_loci_detection(args):
         mode='detection'
     )
 
-    # Fitness p-value: join the per-chromosome raw-p parts and one global BH-FDR. Expose both the
-    # raw empirical fitness p as the canonical `p_value` and its BH-FDR value as `q_value`
-    # (p_fitness_gpd / q_fitness_gpd kept as columns; the tie-free gpd is used for ranking).
+    # Fitness p-value: join the per-chromosome raw-p parts and one global BH-FDR. Expose the raw
+    # empirical fitness p as the canonical `p_value` and its BH-FDR value as `q_value`.
     if calc_p:
         from spice.loci_pvalues import merge_parts
-        final_loci_df = merge_parts(final_loci_df, loci_results_dir,
-                                    statistics=('fitness',), methods=('empirical', 'gpd'))
+        final_loci_df = merge_parts(final_loci_df, loci_results_dir, statistics=('fitness',))
         if 'p_fitness_empirical' in final_loci_df.columns:
             final_loci_df['p_value'] = final_loci_df['p_fitness_empirical']   # raw (pre-FDR) p
         if 'q_fitness_empirical' in final_loci_df.columns:
             final_loci_df['q_value'] = final_loci_df['q_fitness_empirical']   # BH-FDR q
         logger.info('Assigned fitness p/q (p_value = raw p_fitness_empirical, q_value = BH-FDR '
-                    'q_fitness_empirical; p_fitness_gpd / q_fitness_gpd kept as columns)')
+                    'q_fitness_empirical)')
 
     # Save final combined loci results
     final_loci_output_path = os.path.join(config['directories']['results_dir'], config['name'], 'final_loci_detection.tsv')

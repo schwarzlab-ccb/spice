@@ -248,55 +248,16 @@ def _observed_statistic(cur_loci, statistic):
     raise ValueError(f"unknown statistic {statistic!r} (expected 'added_events' or 'fitness')")
 
 
-def _gpd_upper_tail_p(obs, null, N_random, tail_q=0.90, min_exc=15):
-    """Sub-floor upper-tail p: empirical in the body, a Generalized-Pareto peaks-over-threshold fit
-    above the `tail_q` quantile (Knijnenburg 2009). Extrapolates past the 1/(N+1) empirical floor
-    without a normality assumption, so strong loci beyond the null's range get distinct p-values."""
-    from scipy import stats
-    null = np.asarray(null, float); obs = np.asarray(obs, float)
-    # Denominator is the ACTUAL null size, not the requested N_random: a short/partial cache (fewer
-    # resims than N_random) would otherwise inflate the denominator and understate p (too significant).
-    n_null = len(null)
-    p = (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (n_null + 1)   # empirical body/fallback
-    if n_null == 0:
-        # Empty null (e.g. an interrupted/empty cache): there is no tail to fit and np.quantile below
-        # would raise on an empty array -- return the empirical p (all 1.0) instead of crashing.
-        return p
-    u = np.quantile(null, tail_q)
-    exc = null[null > u] - u
-    if len(exc) >= min_exc:
-        # The GPD MLE can raise (non-convergence) or return non-finite/degenerate parameters for
-        # pathological exceedances (e.g. exactly-tied values -> constant `exc`). Either would other-
-        # wise crash the whole chromosome or write NaN into p_fitness_gpd (the PR-curve ranking
-        # column). The empirical `p` above is already a valid fallback, so on any failure keep it.
-        try:
-            c, _, scale = stats.genpareto.fit(exc, floc=0)
-            frac_above = np.mean(null > u)
-            hi = obs > u
-            p_hi = frac_above * stats.genpareto.sf(obs[hi] - u, c, loc=0, scale=scale)
-            if not (np.isfinite(scale) and scale > 0 and np.all(np.isfinite(p_hi))):
-                raise ValueError(f"non-finite GPD fit (c={c}, scale={scale})")
-            p[hi] = np.clip(p_hi, np.finfo(float).tiny, 1.0)
-        except Exception as e:
-            logger.warning(f"GPD tail fit failed ({e}); using empirical p-values for this track")
-    return p
-
-
-def get_actual_p_values_from_results(cur_loci, results, N_random, statistic='added_events',
-                                     method='empirical'):
-    """Upper-tail p per locus vs the resim null. `statistic` selects the tested quantity --
-    'added_events' (SPICE default) or 'fitness' (monotone in selection strength). `method` selects
-    the tail: 'empirical' (count; floors at 1/(N+1)) or 'gpd' (peaks-over-threshold; sub-floor)."""
+def get_actual_p_values_from_results(cur_loci, results, N_random, statistic='added_events'):
+    """Empirical upper-tail p per locus vs the resim null (count; floors at 1/(N+1)). `statistic`
+    selects the tested quantity -- 'added_events' (SPICE default) or 'fitness' (monotone in
+    selection strength)."""
     key = 'fitness_stat' if statistic == 'fitness' else 'added_events'
     obs = _observed_statistic(cur_loci, statistic)
     null = np.array([x[key] for x in results])
     # Use the actual null size (len(null) == len(results)); dividing by the requested N_random would
     # understate p if a short/partial cache holds fewer resims than N_random.
-    if method == 'gpd':
-        return _gpd_upper_tail_p(obs, null, N_random)
-    if method == 'empirical':
-        return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (len(null) + 1)
-    raise ValueError(f"unknown method {method!r} (expected 'empirical' or 'gpd')")
+    return (np.sum(obs[:, None] < null[None, :], axis=1) + 1) / (len(null) + 1)
 
 
 def get_actual_p_values_per_ls_from_results(cur_peaks, results, N_random):

@@ -3,7 +3,7 @@
 Wired into `spice loci_detection`: each per-chromosome run emits a raw (pre-FDR) p-value part
 (`compute_chrom_parts`), and the combine step joins the parts by (chrom, rank_on_chrom, type) and applies
 one global BH-FDR (`merge_parts`). A "track" is a loci `type` -- OG (gains) or TSG (losses). The
-actual p-value machinery lives in spice.tsg_og.p_values (null resim, empirical + GPD tail); this
+actual p-value machinery lives in spice.tsg_og.p_values (resim null, empirical upper-tail p); this
 module is orchestration only.
 """
 import os
@@ -40,10 +40,10 @@ def _null_for_track(cur_chrom, cur_type, data_per_length_scale, N_random, n_iter
 
 
 def compute_track(loci_df, cur_chrom, cur_type, data_per_length_scale, N_random,
-                  n_iterations_optim=1000, statistics=('fitness',), methods=('empirical', 'gpd'),
+                  n_iterations_optim=1000, statistics=('fitness',),
                   cache_dir=None, overwrite=False, mode='random', n_jobs=1):
-    """Raw (pre-FDR) p for the loci of one (chrom, type). Returns a DataFrame indexed like the
-    matching rows of loci_df, one column per (statistic, method): '<statistic>_<method>_raw'."""
+    """Raw (pre-FDR) empirical p for the loci of one (chrom, type). Returns a DataFrame indexed like
+    the matching rows of loci_df, one column per statistic: '<statistic>_empirical_raw'."""
     cur = loci_df.query('chrom == @cur_chrom and type == @cur_type')
     out = pd.DataFrame(index=cur.index)
     if len(cur) == 0:
@@ -51,14 +51,13 @@ def compute_track(loci_df, cur_chrom, cur_type, data_per_length_scale, N_random,
     results = _null_for_track(cur_chrom, cur_type, data_per_length_scale, N_random,
                               n_iterations_optim, cache_dir, overwrite, mode=mode, n_jobs=n_jobs)
     for stat in statistics:
-        for meth in methods:
-            out[f'{stat}_{meth}_raw'] = get_actual_p_values_from_results(
-                cur, results, N_random, statistic=stat, method=meth)
+        out[f'{stat}_empirical_raw'] = get_actual_p_values_from_results(
+            cur, results, N_random, statistic=stat)
     return out
 
 
 def compute_chrom_parts(cur_chrom, loci_results_dir, processed_events, N_random,
-                        n_iterations_optim=1000, statistics=('fitness',), methods=('empirical', 'gpd'),
+                        n_iterations_optim=1000, statistics=('fitness',),
                         overwrite=False, mode='random', n_jobs=1):
     """Per-chromosome raw (pre-FDR) p-value part. Rebuilds this chromosome's loci_df from its
     detection cache with the same create_loci_df combine uses (so the (chrom, rank_on_chrom) keys and
@@ -86,7 +85,7 @@ def compute_chrom_parts(cur_chrom, loci_results_dir, processed_events, N_random,
     loci_df = create_loci_df(sp, widths, nr_stds_widths=2, min_widths_is_small_kernel=True)
 
     raw = [compute_track(loci_df, cur_chrom, typ, dpls, N_random, n_iterations_optim,
-                         statistics=statistics, methods=methods, cache_dir=loci_results_dir,
+                         statistics=statistics, cache_dir=loci_results_dir,
                          overwrite=overwrite, mode=mode, n_jobs=n_jobs) for typ in TRACKS]
     part = loci_df[['chrom', 'rank_on_chrom', 'type']].join(pd.concat(raw))
 
@@ -97,16 +96,16 @@ def compute_chrom_parts(cur_chrom, loci_results_dir, processed_events, N_random,
     return out
 
 
-def merge_parts(loci_df, loci_results_dir, statistics=('fitness',), methods=('empirical', 'gpd')):
+def merge_parts(loci_df, loci_results_dir, statistics=('fitness',)):
     """Join the per-chromosome raw-p parts onto loci_df by (chrom, rank_on_chrom, type). For each
-    (statistic, method) it keeps the raw p-value as p_<statistic>_<method> and adds the global
-    BH-FDR q-value as q_<statistic>_<method>. Drops the intermediate *_raw columns. Leaves loci_df
+    statistic it keeps the raw empirical p-value as p_<statistic>_empirical and adds the global
+    BH-FDR q-value as q_<statistic>_empirical. Drops the intermediate *_raw columns. Leaves loci_df
     untouched if no parts are present."""
     files = sorted(glob.glob(os.path.join(loci_results_dir, 'p_values', 'parts', '*.tsv')))
     if not files:
         return loci_df
     raw = pd.concat([pd.read_csv(f, sep='\t') for f in files], ignore_index=True)
-    rawcols = [f'{s}_{m}_raw' for s in statistics for m in methods if f'{s}_{m}_raw' in raw.columns]
+    rawcols = [f'{s}_empirical_raw' for s in statistics if f'{s}_empirical_raw' in raw.columns]
     # Join on the full documented key (chrom, rank_on_chrom, type). create_loci_df numbers all loci on
     # a chromosome 0..n-1, so (chrom, rank_on_chrom) is unique across tracks today and type is redundant
     # for matching -- but including it matches compute_chrom_parts' key (parts are built from the same
@@ -115,11 +114,10 @@ def merge_parts(loci_df, loci_results_dir, statistics=('fitness',), methods=('em
     loci_df = loci_df.merge(raw[['chrom', 'rank_on_chrom', 'type'] + rawcols],
                             on=['chrom', 'rank_on_chrom', 'type'], how='left')
     for s in statistics:
-        for m in methods:
-            col = f'{s}_{m}_raw'
-            if col in loci_df.columns:
-                ok = loci_df[col].notna()
-                loci_df[f'p_{s}_{m}'] = loci_df[col]                     # raw (pre-FDR) p-value
-                loci_df.loc[ok, f'q_{s}_{m}'] = false_discovery_control(  # global BH-FDR q-value
-                    loci_df.loc[ok, col].to_numpy())
+        col = f'{s}_empirical_raw'
+        if col in loci_df.columns:
+            ok = loci_df[col].notna()
+            loci_df[f'p_{s}_empirical'] = loci_df[col]                     # raw (pre-FDR) p-value
+            loci_df.loc[ok, f'q_{s}_empirical'] = false_discovery_control(  # global BH-FDR q-value
+                loci_df.loc[ok, col].to_numpy())
     return loci_df.drop(columns=rawcols)
