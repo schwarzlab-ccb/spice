@@ -238,7 +238,7 @@ def p_values_within_ci_filter(cur_chrom, optimized_selection_points, cur_resim, 
     return filtered_selection_points
 
 
-def get_actual_p_values_from_results(cur_loci, results, N_random):
+def get_actual_p_values_from_results(cur_loci, results, _N_random):
     """Empirical upper-tail p per locus vs the resim null on the FITNESS statistic (mean optimized
     fitness over the four same-direction length scales; monotone in selection strength). Count-based,
     so it floors at 1/(N+1)."""
