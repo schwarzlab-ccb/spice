@@ -9,7 +9,8 @@ import re
 
 # Import base package only; defer submodule imports until after config is loaded
 import spice
-from spice.utils import save_pickle
+from spice.utils import save_pickle, open_pickle
+# No other SPICE imports here!
 
 
 def main_event_inference(args):
@@ -447,7 +448,6 @@ def main_plotting(args):
         fig.savefig(out_path, bbox_inches='tight')
         logger.info(f'Saved plot to {out_path}')
     elif args.plot_loci_on_chrom is not None:
-        from spice.utils import open_pickle
         from spice.tsg_og.detection import convolution_simulation_per_ls
         
         cur_chrom = args.plot_loci_on_chrom
@@ -603,6 +603,32 @@ def main_loci_detection(args):
         steps_to_run = steps_to_run[0]
     logger.info(f'Running the following loci detection steps: {steps_to_run}')
 
+    # `--chrom` runs a single chromosome as a parallel scatter unit (detection + its fitness p-value
+    # part), skipping the cross-chromosome combine.
+    if args.chrom is not None:
+        if args.chrom not in list(chromosomes):
+            raise ValueError(f'--chrom {args.chrom} not among detected chromosomes: {list(chromosomes)}')
+        chromosomes = [args.chrom]
+        logger.info(f'Restricting to a single chromosome (scatter unit): {args.chrom}')
+    # --chrom is a per-chromosome scatter unit (detection + p-value part); with 'combine' the loop
+    # below skips every chromosome and then returns early -> a green run that produces nothing.
+    # Reject it rather than silently no-op.
+    if args.chrom is not None and steps_to_run == "combine":
+        raise ValueError("--chrom runs one chromosome's detection + p-value part and is incompatible "
+                         "with --loci-steps combine (the cross-chromosome combine runs without --chrom).")
+    calc_p = loci_params.get('calculate_p_value', True)
+    p_values_N_random = loci_params['p_values_N_random']
+    p_values_N_iterations = loci_params['p_values_N_iterations']
+    p_value_mode = loci_params['p_values_mode']
+    p_values_optimize_ls_separately = loci_params.get('p_values_optimize_ls_separately', False)
+    p_thresh = loci_params['p_value_threshold'] # loci with q_value >= this are dropped
+    if calc_p:
+        logger.info(f'Fitness p-value (resim null): mode={p_value_mode}, N_iterations_optim={p_values_N_iterations}, '
+                    f'N_random={p_values_N_random}, optimize_ls_separately={p_values_optimize_ls_separately}; '
+                    f'keeping loci with q_value < {p_thresh}')
+    else:
+        logger.info('Fitness p-value resim disabled (calculate_p_value=false)')
+
     for chrom in chromosomes:
         if steps_to_run == "combine":
             continue
@@ -637,25 +663,40 @@ def main_loci_detection(args):
             within_ci_N_iterations=loci_params['within_ci_N_iterations'],
             th_locus_prominence=loci_params['th_locus_prominence'],
         )
+        if calc_p:
+            # Warm the resim-null cache for this chromosome (both tracks) in parallel. The combine's
+            # assign_p_values shares this cache key, so it reuses these nulls and never re-simulates.
+            from spice.tsg_og.p_values import resim_null_for_chrom_type
+            dpls = open_pickle(os.path.join(loci_results_dir, 'data_per_length_scale', f'{chrom}.pickle'))
+            for cur_type in ('OG', 'TSG'):
+                resim_null_for_chrom_type(chrom, cur_type, dpls, loci_results_dir,
+                                          p_values_N_random, p_values_N_iterations, mode=p_value_mode,
+                                          optimize_ls_separately=p_values_optimize_ls_separately,
+                                          overwrite=args.overwrite, n_jobs=args.cores)
+            logger.info(f'  warmed fitness p-value resim cache for {chrom}')
 
-    if not (steps_to_run in ['fast', 'default', 'combine'] or 'combine' in steps_to_run or '+' in steps_to_run):
+    if args.chrom is not None:
+        logger.info(f'Per-chromosome step for {args.chrom} complete (detection + p-value part); skipping combine.')
+        return
+
+    if not (steps_to_run in ['fast', 'full', 'combine'] or 'combine' in steps_to_run or '+' in steps_to_run):
         logger.info(steps_to_run)
         logger.warning("Loci detection steps do not include 'combine'. Final combination of loci across chromosomes will be skipped.")
         return
 
     # Combine results from all chromosomes
     logger.info('Combining all loci detection results across chromosomes')
-    from spice.main_loci_functions import combine_loci
+    from spice.main_loci_functions import combine_loci # has to be imported here
     final_loci_df, filtered_selection_points, filtered_loci_widths = combine_loci(
         loci_results_dir=loci_results_dir,
         processed_events=processed_events,
-        calculate_p_value=loci_params['calculate_p_value'],
+        calculate_p_value=calc_p,
         p_values_N_random=loci_params['p_values_N_random'],
         p_values_N_iterations=loci_params['p_values_N_iterations'],
-        post_p_value_N_iterations=loci_params['post_p_value_N_iterations'],
         p_value_threshold=loci_params['p_value_threshold'],
-        p_value_statistic=loci_params['p_value_statistic'],
         p_values_mode=loci_params['p_values_mode'],
+        p_values_optimize_ls_separately=p_values_optimize_ls_separately,
+        p_value_cores=args.cores,
         overwrite=args.overwrite,
         mode='detection'
     )
@@ -730,8 +771,9 @@ def main_loci_assignment(args):
         calculate_p_value=loci_params['calculate_p_value'],
         p_values_N_random=loci_params['p_values_N_random'],
         p_values_N_iterations=loci_params['p_values_N_iterations'],
-        post_p_value_N_iterations=loci_params['post_p_value_N_iterations'],
         p_values_mode=loci_params['p_values_mode'],
+        p_values_optimize_ls_separately=loci_params.get('p_values_optimize_ls_separately', False),
+        p_value_threshold=loci_params['p_value_threshold'],
         overwrite=args.overwrite,
         overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
     )
@@ -961,6 +1003,12 @@ Examples:
         help='Steps to run. If not present will use "loci_steps" from config. Use "fast" for accelerated mode, "all" or "default" for full pipeline, or a trailing + (e.g., split+) to run that step and all subsequent steps.'
     )
     parser_loci.add_argument(
+        '--cores', '-j',
+        type=int,
+        default=1,
+        help='Parallel joblib workers for the fitness p-value resim (independent resims; default: 1)'
+    )
+    parser_loci.add_argument(
         '--overwrite',
         action='store_true',
         help='Run new and overwrite existing data'
@@ -988,8 +1036,14 @@ Examples:
         default=1,
         help='Number of cores for local Snakemake execution (-c, default: 1)'
     )
+    parser_loci.add_argument(
+        '--chrom',
+        default=None,
+        help='Run detection + the per-chromosome fitness p-value for this one chromosome only '
+             '(a parallel scatter unit); skips the cross-chromosome combine.'
+    )
     parser_loci.set_defaults(func=main_loci_detection)
-    
+
     # ===== LOCI ASSIGNMENT SUBPARSER =====
     parser_assign = subparsers.add_parser(
         'loci_assignment',

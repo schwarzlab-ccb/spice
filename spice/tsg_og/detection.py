@@ -1149,7 +1149,7 @@ def merge_overlapping_loci(
 
     # Find overlapping loci. create_loci_df's canonical schema is start/end/type (the std-based
     # bounds pos±width/2, and OG/TSG direction); this step still referenced the retired
-    # start_std/end_std/up_down names -> KeyError. It only surfaced under loci_steps='default' (which
+    # start_std/end_std/up_down names -> KeyError. It only surfaced under loci_steps='full' (which
     # runs `merging`; 'fast' skips it), so the schema drift had gone unnoticed. Map to current columns.
     loci_within_other_loci = np.logical_and(
         np.logical_and(

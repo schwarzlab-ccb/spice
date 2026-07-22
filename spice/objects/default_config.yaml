@@ -38,7 +38,7 @@ params:
 
 loci_detection:
   # De-novo loci detection parameters
-  loci_steps: 'fast' # Steps to run: 'default', 'fast', combine, single step, or space-separated steps
+  loci_steps: 'fast' # Steps to run: 'full', 'fast', combine, single step, or space-separated steps
   N_loci: 100 # Number of loci to detect
   skip_up_down: False # Skip up/down assignment
   use_original_rank: False # Use original rank from detection instead of re-ranking
@@ -67,14 +67,13 @@ loci_detection:
   loci_assignment_within_ci_N_iterations: 100 # Number of iterations for within ci filtering
   # Loci combination and scoring parameters
   p_values_N_random: 1000 # Number of random samples for p-value calculation
-  p_values_N_iterations: 100 # Number of optimization iterations for p-value calculations
-  post_p_value_N_iterations: 250 # Number of optimization iterations after p-value filtering
+  p_values_N_iterations: 1000 # Number of optimization iterations for p-value calculations
   calculate_p_value: True # Whether to calculate p-values from scratch (if False, load from cache)
-  p_value_threshold: 0.05 # Threshold for significant p-values
-  p_value_statistic: 'added_events' # Statistic to use for p-value calculation ('added_events' or 'fitness')
-  p_values_mode: 'random' # How resimulation loci are chosen for p-value calculation ('random' or 'top')
+  p_value_threshold: 0.05 # Loci with q_value (BH-FDR fitness p) >= this are dropped from the output
+  p_values_mode: 'top' # How resimulation loci are chosen for p-value calculation ('random' or 'top')
+  p_values_optimize_ls_separately: False # Only used when p_values_mode='top'. If True, each length scale gets its own top-residual position and is optimized separately, instead of jointly optimizing one shared position
   # Event preprocessing parameters
   remove_plateaus: True # Remove events overlapping copy-number plateaus
   remove_chrY: True # Remove chrY events from analysis
-  drop_duplicates: False # Remove duplicate event entries
+  drop_duplicates: True # Remove duplicate event entries
   use_observed_centromeres: True # Use empirically observed centromere positions

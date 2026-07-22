@@ -36,7 +36,7 @@ CHROMS = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
 def run_loci_detection_per_chrom(
     final_events_df,
     cur_chrom,
-    which='default',
+    which='full',
     name=None,
     N_loci=100,
     overwrite=False,
@@ -71,8 +71,8 @@ def run_loci_detection_per_chrom(
     ----------
     cur_chrom : str
         Chromosome to analyze
-    which : str, default='default'
-        Which steps to run: 'default', single step, or comma-separated steps
+    which : str, default='full'
+        Which steps to run: 'full', single step, or comma-separated steps
     name : str, optional
         Project name (from config if not provided)
     N_loci : int, default=100
@@ -134,7 +134,7 @@ def run_loci_detection_per_chrom(
     if hasattr(which, '__iter__') and len(which)==1:
         which = which[0]
     if isinstance(which, str):
-        if which == 'default':
+        if which == 'full':
             which_steps = which_options
         elif which == 'fast':
             which_steps = which_fast
@@ -145,7 +145,7 @@ def run_loci_detection_per_chrom(
         elif which in which_options:
             which_steps = [which]
         else:
-            raise ValueError(f"Unknown which mode: {which}. Use 'default', 'fast', or a step name with '+'")
+            raise ValueError(f"Unknown which mode: {which}. Use 'full', 'fast', or a step name (with or without '+')")
     else:
         assert hasattr(which, '__iter__'), which
         which_steps = which
@@ -547,11 +547,11 @@ def combine_loci(
     processed_events: Optional[pd.DataFrame] = None,
     p_values_N_random: int = 10_000,
     p_values_N_iterations: int = 1_000,
-    post_p_value_N_iterations: int = 25_000,
     calculate_p_value: bool = False,
     p_value_threshold: float = 0.05,
-    p_value_statistic: str = 'added_events',
     p_values_mode: str = 'random',
+    p_values_optimize_ls_separately: bool = False,
+    p_value_cores: int = 1,
     overwrite: bool = False,
     mode: str = 'detection',
 ) -> pd.DataFrame:
@@ -618,44 +618,53 @@ def combine_loci(
     
     log_debug(logger, f'Loaded results from {len(all_selection_points)} chromosomes')
     
-    # Conditionally run full_filter_by_p_values based on calculate_p_value config
+    # Run build_and_score_loci to create final loci dataframe
+    log_debug(logger, "Building and scoring loci dataframe")
+    loci_df = build_final_loci_df(
+        all_selection_points=all_selection_points,
+        all_loci_widths=all_loci_widths,
+        final_events_df=processed_events
+    )
+    
     if calculate_p_value:
-        # Run full_filter_by_p_values to filter loci by significance
-        logger.info('Running p-value filtering')
-        filtered_selection_points, filtered_loci_widths, final_p_values = full_filter_by_p_values(
-            all_selection_points=all_selection_points,
-            all_loci_widths=all_loci_widths,
-            all_data_per_length_scale=all_data_per_length_scale,
-            loci_df=None,
-            output_dir=loci_results_dir,
-            N_random=p_values_N_random,
-            p_values_N_iterations=p_values_N_iterations,
-            post_p_value_N_iterations=post_p_value_N_iterations,
-            final_events_df=processed_events,
-            p_value_threshold=p_value_threshold,
-            p_value_statistic=p_value_statistic,
-            p_values_mode=p_values_mode,
-            overwrite=overwrite,
-        )
-        logger.info(f'Filtered to {sum(len(x) for x in filtered_loci_widths.values())} significant loci (p < {p_value_threshold})')
+        from spice.length_scales import LENGTH_SCALE_NAMES
+        data_per_length_scale_dirs = os.path.join(loci_results_dir, 'data_per_length_scale')
+        all_data_per_length_scale = {c: open_pickle(os.path.join(data_per_length_scale_dirs, f'{c}.pickle'))
+                    for c in loci_df['chrom'].unique()
+                    if os.path.exists(os.path.join(data_per_length_scale_dirs, f'{c}.pickle'))}
+        final_loci_df = assign_p_values(
+            loci_df, N_random=p_values_N_random, n_iterations_optim=p_values_N_iterations,
+            output_dir=loci_results_dir, data_per_length_scale=all_data_per_length_scale,
+            overwrite=False, mode=p_values_mode, optimize_ls_separately=p_values_optimize_ls_separately,
+            n_jobs=p_value_cores)
+        # assign_p_values: p_value_raw = raw p, p_value = BH-FDR q. Remap to canonical raw p / FDR q.
+        final_loci_df['q_value'] = final_loci_df['p_value']
+        final_loci_df['p_value'] = final_loci_df.pop('p_value_raw')
+        for ls in LENGTH_SCALE_NAMES:
+            final_loci_df[f'q_value_{ls}'] = final_loci_df.pop(f'p_value_{ls}')      # BH-FDR per scale
+            final_loci_df[f'p_value_{ls}'] = final_loci_df.pop(f'p_value_raw_{ls}')  # raw per scale
+        # Filter to significant loci (q_value < threshold): drop rows AND the matching selection points /
+        # widths (indexed per chromosome by rank_on_chrom, which numbers a chromosome's loci 0..n-1).
+        n_before = len(final_loci_df)
+        filtered_selection_points = dict()
+        filtered_loci_widths = dict()
+        for cur_chrom in list(all_selection_points.keys()):
+            keep = final_loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom')['q_value'].to_numpy() < p_value_threshold
+            filtered_selection_points[cur_chrom] = [
+                [x for i, x in enumerate(track) if keep[i]] for track in all_selection_points[cur_chrom]]
+            filtered_loci_widths[cur_chrom] = [
+                x for i, x in enumerate(all_loci_widths[cur_chrom]) if keep[i]]
+        final_loci_df = final_loci_df[final_loci_df['q_value'] < p_value_threshold].reset_index(drop=True)
+        logger.info(f'Assigned fitness p/q via assign_p_values (global BH-FDR; p_value = raw, '
+                    f'q_value = BH-FDR q) and kept {len(final_loci_df)}/{n_before} loci with q_value < {p_value_threshold}')
     else:
         # Skip p-value filtering and use all loci
         logger.info('Skipping p-value filtering (calculate_p_value=False)')
         filtered_selection_points = all_selection_points
         filtered_loci_widths = all_loci_widths
-        final_p_values = None
-    
-    # Run build_and_score_loci to create final loci dataframe
-    log_debug(logger, "Building and scoring loci dataframe")
-    loci_df = build_final_loci_df(
-        all_selection_points=filtered_selection_points,
-        all_loci_widths=filtered_loci_widths,
-        final_events_df=processed_events,
-        final_p_values=final_p_values,
-    )
-    
-    log_debug(logger, f'Final loci dataframe: {len(loci_df)} loci across {loci_df["chrom"].nunique()} chromosomes')   
-    return loci_df, filtered_selection_points, filtered_loci_widths
+
+    log_debug(logger, f'Final loci dataframe: {len(final_loci_df)} loci across {final_loci_df["chrom"].nunique()} chromosomes')   
+    return final_loci_df, filtered_selection_points, filtered_loci_widths
 
 
 def process_final_events_for_loci_routines(
@@ -708,6 +717,8 @@ def process_final_events_for_loci_routines(
     if final_events_df is None:
         log_debug(logger, "Loading final events dataframe from file")
         final_events_df = data_loaders.load_final_events()
+
+    raw_length = len(final_events_df)
 
     log_debug(logger, f"Loaded {len(final_events_df)} events events across {final_events_df['sample'].nunique()} samples and {final_events_df['id'].nunique()} IDs")
     
@@ -841,6 +852,8 @@ def process_final_events_for_loci_routines(
 
     # Very important for some downstream analysis that requires unique indices
     final_events_df = final_events_df.reset_index(drop=True)
+
+    logger.info(f'Processed final events for loci routines: {len(final_events_df)} events across {final_events_df["sample"].nunique()} samples and {final_events_df["id"].nunique()} IDs (from {raw_length} raw events)')
 
     return final_events_df
 
@@ -981,8 +994,9 @@ def loci_assignment(
     N_iterations_optim: int = 11_000,
     p_values_N_random: int = 10_000,
     p_values_N_iterations: int = 1_000,
-    post_p_value_N_iterations: int = 25_000,
     p_values_mode: str = 'random',
+    p_values_optimize_ls_separately: bool = False,
+    p_value_threshold: float = 0.05,
     overwrite: bool = False,
     overwrite_preprocessing: bool = False,
     calculate_p_value: bool = True,
@@ -1100,12 +1114,12 @@ def loci_assignment(
         processed_events=processed_events,
         p_values_N_random=p_values_N_random,
         p_values_N_iterations=p_values_N_iterations,
-        post_p_value_N_iterations=post_p_value_N_iterations,
         p_values_mode=p_values_mode,
+        p_values_optimize_ls_separately=p_values_optimize_ls_separately,
+        p_value_threshold=p_value_threshold,
         calculate_p_value=calculate_p_value,
         overwrite=overwrite,
         mode='assignment'
-        ###
     )
     
     logger.info('='*80)
@@ -1119,7 +1133,6 @@ def build_final_loci_df(
     all_selection_points: Dict,
     all_loci_widths: Dict,
     final_events_df: pd.DataFrame,
-    final_p_values=None
 
 ) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """
@@ -1137,123 +1150,4 @@ def build_final_loci_df(
                                             all_selection_points=all_selection_points,
                                             final_events_df=final_events_df)
     
-    if final_p_values is not None:
-        assert len(final_p_values) == len(loci_df), (
-            f'Length mismatch between provided final_p_values ({len(final_p_values)}) '
-            f'and loci_df ({len(loci_df)})'
-        )
-        loci_df['p_value'] = final_p_values
-    else:
-        loci_df['p_value'] = 'not calculated'
-
     return loci_df
-
-
-@CALC_NEW()
-def full_filter_by_p_values(
-    all_selection_points,
-    all_loci_widths,
-    all_data_per_length_scale,
-    output_dir,
-    loci_df=None,
-    p_value_threshold=0.05,
-    p_value_statistic='added_events',
-    p_values_mode='random',
-    N_random=10_000,
-    p_values_N_iterations=1_000,
-    post_p_value_N_iterations=25_000,
-    final_events_df=None,
-    overwrite=False,
-):
-    from spice import directories, config
-    if loci_df is None:
-        assert final_events_df is not None, "final_events_df must be provided if loci_df is None"
-        loci_df = create_loci_df(all_selection_points, all_loci_widths, nr_stds_widths=2,
-                                   min_widths_is_small_kernel=True)
-        loci_df = calculate_events_per_loci_df(loci_df,
-                                                all_selection_points=all_selection_points,
-                                                final_events_df=final_events_df)
-
-    log_debug(logger, 'Calculating p-values for loci')
-    loci_df = assign_p_values(
-        loci_df,
-        N_random=N_random,
-        n_iterations_optim=p_values_N_iterations,
-        output_dir=output_dir,
-        data_per_length_scale=all_data_per_length_scale,
-        overwrite=overwrite,
-        statistic=p_value_statistic,
-        mode=p_values_mode,
-    )
-
-    if len(loci_df) == 0:
-        # Empty bucket: no candidate loci at all (e.g. no events of this type/size on this chromosome)
-        logger.warning('No candidate loci found; returning an empty locus set')
-        return {}, {}, np.array([])
-
-    n_significant = len(loci_df.query("p_value < @p_value_threshold"))
-    logger.info(f'Out of {len(loci_df)} loci, {n_significant} ({n_significant/len(loci_df):.2%}%) are significant at p < {p_value_threshold} ')
-
-    try:
-        filtered_selection_points = {}
-        filtered_loci_widths = {}
-        final_p_values = []
-        for cur_chrom in loci_df['chrom'].unique():
-            cur_sp = [list(x) for x in copy_list_of_selection_points(all_selection_points[cur_chrom])]
-            cur_loci = loci_df.query('chrom == @cur_chrom')
-            is_significant = cur_loci.sort_values('rank_on_chrom').eval('p_value < @p_value_threshold').values
-            filtered_selection_points[cur_chrom] = [
-                [x for i, x in enumerate(ls_x) if is_significant[i]] for ls_x in cur_sp]
-            filtered_loci_widths[cur_chrom] = [
-                x for i, x in enumerate(all_loci_widths[cur_chrom]) if is_significant[i]]
-            final_p_values.append(cur_loci.sort_values('rank_on_chrom').loc[is_significant]['p_value'].values)
-        final_p_values = np.concatenate(final_p_values) if final_p_values else np.array([])
-        assert np.all(final_p_values < p_value_threshold), f'{np.sum(final_p_values >= p_value_threshold)} loci with p >= {p_value_threshold} after filtering'
-        assert len(final_p_values) == sum(len(x) for x in filtered_loci_widths.values()), (
-            f'Length mismatch between final_p_values ({len(final_p_values)}) and filtered loci '
-            f'({sum(len(x) for x in filtered_loci_widths.values())})'
-        )
-        if len(final_p_values) == 0:
-            # Empty bucket: loci existed but none survived the p-value cut
-            logger.warning('No loci passed the p-value filtering!')
-            return filtered_selection_points, filtered_loci_widths, final_p_values
-
-        logger.info('Optimizing selection points after p-value filtering')
-        for cur_chrom in loci_df['chrom'].unique():
-            cur_sp = filtered_selection_points[cur_chrom]
-            if len(cur_sp[0]) == 0:
-                # Empty bucket for this chromosome specifically: nothing left to optimize
-                log_debug(logger, f'No significant loci left on {cur_chrom} after filtering; skipping optimization')
-                continue
-            log_debug(logger, f'Optimizing selection points on {cur_chrom}')
-            allowed_fitness_change = np.stack([[x[0].fitness != 0 for x in y] for y in cur_sp])
-            up_down_order = np.array([any([cur_sp[j][cluster_j][0].fitness > 0 for j in range(0, 8, 2)])
-                                for cluster_j in range(len(cur_sp[0]))])
-            cur_conv = convolution_simulation_per_ls(cur_chrom, all_data_per_length_scale[cur_chrom], cur_sp)
-            cur_mse = calc_mse_loss(all_data_per_length_scale[cur_chrom], cur_conv)
-            cur_sp_optim, _, _ = _optimize_selection_points(
-                post_p_value_N_iterations,
-                list(zip(*cur_sp)),
-                all_data_per_length_scale[cur_chrom],
-                cur_chrom,
-                best_loss=cur_mse,
-                show_progress=False,
-                N_iterations_base=0,
-                max_fitness=[1.1*max([y[0].fitness for y in x]) for x in cur_sp],
-                loci_to_optimize=None,
-                final_iteration=False,
-                allowed_fitness_change=allowed_fitness_change,
-                max_deviation=0.00001,
-                allow_pos_change=False,
-                up_down_order=up_down_order,
-                blocked_distance_th=2e5
-            )
-            filtered_selection_points[cur_chrom] = list(zip(*cur_sp_optim))
-
-        return filtered_selection_points, filtered_loci_widths, final_p_values
-
-    except (ZeroDivisionError, IndexError, ValueError, KeyError, AssertionError) as e:
-        # Catch-all for empty/mis-sized buckets we didn't anticipate above (e.g. mask/list
-        # misalignment) - treat as "nothing significant" rather than aborting the whole run.
-        logger.warning(f'p-value filtering failed ({type(e).__name__}: {e}); treating as an empty bucket and returning no loci')
-        return {}, {}, np.array([])

@@ -88,7 +88,6 @@ def temp_workspace_with_loci():
                 'loci_assignment_within_ci_N_iterations': 100,
                 'p_values_N_random': 100,
                 'p_values_N_iterations': 100,
-                'post_p_value_N_iterations': 250,
                 'calculate_p_value': True,
                 'p_value_threshold': 0.05,
                 'remove_plateaus': True,

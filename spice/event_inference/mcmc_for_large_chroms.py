@@ -60,10 +60,6 @@ def mcmc_event_selection(
         loh_check_before_distance_calculation=False, # needed to compare results with knn
         total_cn=False,
         return_full=False):
-    
-    from ortools import __version__
-    if __version__ != '9.8.3296':
-        raise ValueError(f"ortools must have version 9.8.3296, current version is {__version__}")
 
     has_wgd = chrom_data.has_wgd
 
