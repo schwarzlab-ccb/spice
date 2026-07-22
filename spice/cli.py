@@ -679,7 +679,7 @@ def main_loci_detection(args):
         logger.info(f'Per-chromosome step for {args.chrom} complete (detection + p-value part); skipping combine.')
         return
 
-    if not (steps_to_run in ['fast', 'default', 'combine'] or 'combine' in steps_to_run or '+' in steps_to_run):
+    if not (steps_to_run in ['fast', 'full', 'combine'] or 'combine' in steps_to_run or '+' in steps_to_run):
         logger.info(steps_to_run)
         logger.warning("Loci detection steps do not include 'combine'. Final combination of loci across chromosomes will be skipped.")
         return

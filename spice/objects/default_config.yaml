@@ -38,7 +38,7 @@ params:
 
 loci_detection:
   # De-novo loci detection parameters
-  loci_steps: 'fast' # Steps to run: 'default', 'fast', combine, single step, or space-separated steps
+  loci_steps: 'fast' # Steps to run: 'full', 'fast', combine, single step, or space-separated steps
   N_loci: 100 # Number of loci to detect
   skip_up_down: False # Skip up/down assignment
   use_original_rank: False # Use original rank from detection instead of re-ranking

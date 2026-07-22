@@ -36,7 +36,7 @@ CHROMS = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
 def run_loci_detection_per_chrom(
     final_events_df,
     cur_chrom,
-    which='default',
+    which='full',
     name=None,
     N_loci=100,
     overwrite=False,
@@ -71,8 +71,8 @@ def run_loci_detection_per_chrom(
     ----------
     cur_chrom : str
         Chromosome to analyze
-    which : str, default='default'
-        Which steps to run: 'default', single step, or comma-separated steps
+    which : str, default='full'
+        Which steps to run: 'full', single step, or comma-separated steps
     name : str, optional
         Project name (from config if not provided)
     N_loci : int, default=100
@@ -134,7 +134,7 @@ def run_loci_detection_per_chrom(
     if hasattr(which, '__iter__') and len(which)==1:
         which = which[0]
     if isinstance(which, str):
-        if which == 'default':
+        if which == 'full':
             which_steps = which_options
         elif which == 'fast':
             which_steps = which_fast
@@ -145,7 +145,7 @@ def run_loci_detection_per_chrom(
         elif which in which_options:
             which_steps = [which]
         else:
-            raise ValueError(f"Unknown which mode: {which}. Use 'default', 'fast', or a step name with '+'")
+            raise ValueError(f"Unknown which mode: {which}. Use 'full', 'fast', or a step name (with or without '+')")
     else:
         assert hasattr(which, '__iter__'), which
         which_steps = which

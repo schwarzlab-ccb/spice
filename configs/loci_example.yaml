@@ -7,6 +7,7 @@ directories:
   base_dir: '.'
 
 loci_detection:
+  loci_steps: 'fast' # Steps to run: 'full', 'fast', combine, single step, or space-separated steps
   N_loci: 10
   th_locus_prominence: 1 # Needs to be this low because we do not have enough data
   p_values_N_random: 100 # Low so it is fast
