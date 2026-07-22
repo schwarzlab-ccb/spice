@@ -716,6 +716,8 @@ def process_final_events_for_loci_routines(
         log_debug(logger, "Loading final events dataframe from file")
         final_events_df = data_loaders.load_final_events()
 
+    raw_length = len(final_events_df)
+
     log_debug(logger, f"Loaded {len(final_events_df)} events events across {final_events_df['sample'].nunique()} samples and {final_events_df['id'].nunique()} IDs")
     
     if remove_chrY:
@@ -848,6 +850,8 @@ def process_final_events_for_loci_routines(
 
     # Very important for some downstream analysis that requires unique indices
     final_events_df = final_events_df.reset_index(drop=True)
+
+    logger.info(f'Processed final events for loci routines: {len(final_events_df)} events across {final_events_df["sample"].nunique()} samples and {final_events_df["id"].nunique()} IDs (from {raw_length} raw events)')
 
     return final_events_df
 
