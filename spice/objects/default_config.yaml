@@ -74,5 +74,5 @@ loci_detection:
   # Event preprocessing parameters
   remove_plateaus: True # Remove events overlapping copy-number plateaus
   remove_chrY: True # Remove chrY events from analysis
-  drop_duplicates: False # Remove duplicate event entries
+  drop_duplicates: True # Remove duplicate event entries
   use_observed_centromeres: True # Use empirically observed centromere positions
