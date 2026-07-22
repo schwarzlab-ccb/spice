@@ -71,6 +71,7 @@ loci_detection:
   calculate_p_value: True # Whether to calculate p-values from scratch (if False, load from cache)
   p_value_threshold: 0.05 # Loci with q_value (BH-FDR fitness p) >= this are dropped from the output
   p_values_mode: 'top' # How resimulation loci are chosen for p-value calculation ('random' or 'top')
+  p_values_optimize_ls_separately: False # Only used when p_values_mode='top'. If True, each length scale gets its own top-residual position and is optimized separately, instead of jointly optimizing one shared position
   # Event preprocessing parameters
   remove_plateaus: True # Remove events overlapping copy-number plateaus
   remove_chrY: True # Remove chrY events from analysis

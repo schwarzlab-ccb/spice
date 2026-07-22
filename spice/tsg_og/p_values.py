@@ -35,6 +35,7 @@ def p_value_using_resim(
         n_iterations_optim=None,
         blocked_distance_th=2e5,
         within_ci_filtering=False,
+        optimize_ls_separately=False,
         log_progress=False,
         skip_tqdm=False,
         save_all=False,
@@ -52,6 +53,10 @@ def p_value_using_resim(
             configuration (p_values_mode), not defaulted here.
         n_iterations_optim: Number of optimization iterations (defaults: 1000 for 'random',
             5000 for 'top')
+        optimize_ls_separately: Only used when mode='top'. If True, each of the four same-direction
+            length scales gets its own top-residual position and is optimized on its own (via
+            `ls_to_optimize`), instead of jointly optimizing a single shared position across all
+            length scales. `fitness_stat` is then the mean of the four resulting `fit_<ls>` values.
         n_jobs: parallelise the (independent) resims across this many joblib workers (each worker
             runs its resims sequentially, single-core). n_jobs<=1 -> original sequential path.
     """
@@ -94,9 +99,11 @@ def p_value_using_resim(
         cur_resim = [x[0] for x in resim]
 
         if mode == 'top':
-            # Position of the largest same-direction residual in this resimulation, blocking
-            # telomeres, the centromere, and regions already within the bootstrap CI -- same
-            # construction as the residual-driven locus search in detect_tsgs_ogs_for_all_length_scales.
+            # Per-length-scale residuals (and within-CI mask), blocking telomeres, the centromere,
+            # and regions already within the bootstrap CI -- same construction as the residual-driven
+            # locus search in detect_tsgs_ogs_for_all_length_scales. Shared by the joint (summed
+            # across the four same-direction length scales) and the optimize_ls_separately (per
+            # length scale) position selection below.
             conv_sim = convolution_simulation_per_ls(cur_chrom, data_per_length_scale, None,
                                     segment_size_dict=segment_size_dict)
             cur_residuals = [(rs - generated_signal) / data['cur_loss_norm']
@@ -105,12 +112,6 @@ def p_value_using_resim(
             cur_residuals_upsampled = [np.repeat(cur_res, data['signal_upsampling']) for cur_res, data in zip(cur_residuals, data_per_length_scale.values())]
             cur_pad_width = [(len(cur_residuals_upsampled[0])-len(cur_res)) for cur_res in cur_residuals_upsampled]
             cur_residuals_upsampled = [np.pad(cur_res, (pad // 2 + pad % 2, pad // 2)) for cur_res, pad in zip(cur_residuals_upsampled, cur_pad_width)]
-            cur_residuals_abs_sum = np.sum(np.stack([np.abs(x) for ls_i, x in enumerate(cur_residuals_upsampled) if ls_i in length_scales_for_residuals]), axis=0)
-
-            # Block telomeres and centromere
-            cur_residuals_abs_sum[:telomere_block_start] = 0
-            cur_residuals_abs_sum[telomere_block_end:] = 0
-            cur_residuals_abs_sum[centromere_block_start:centromere_block_end] = 0
 
             # Block regions that are within CI
             within_ci = [np.logical_and(conv < data['signal_bounds'][1], conv > data['signal_bounds'][0])
@@ -119,9 +120,19 @@ def p_value_using_resim(
                     for c, data in zip(within_ci, data_per_length_scale.values())]
             pad = [(len(ci_up[0]) - len(c)) for c in ci_up]
             ci_up = [np.pad(c, (p // 2 + p % 2, p // 2)) for c, p in zip(ci_up, pad)]
-            cur_residuals_abs_sum[np.all(np.stack(ci_up), axis=0).astype(bool)] = 0
 
-            cur_pos = np.argmax(cur_residuals_abs_sum) * segment_size_dict['small']
+            if not optimize_ls_separately:
+                cur_residuals_abs_sum = np.sum(np.stack([np.abs(x) for ls_i, x in enumerate(cur_residuals_upsampled) if ls_i in length_scales_for_residuals]), axis=0)
+
+                # Block telomeres and centromere
+                cur_residuals_abs_sum[:telomere_block_start] = 0
+                cur_residuals_abs_sum[telomere_block_end:] = 0
+                cur_residuals_abs_sum[centromere_block_start:centromere_block_end] = 0
+
+                # Block regions that are within CI (in ALL four length scales)
+                cur_residuals_abs_sum[np.all(np.stack(ci_up), axis=0).astype(bool)] = 0
+
+                cur_pos = np.argmax(cur_residuals_abs_sum) * segment_size_dict['small']
         elif mode == 'random':
             p_arm_length = CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_start']
             q_arm_length = (CHROM_LENS.loc[cur_chrom] -
@@ -150,56 +161,132 @@ def p_value_using_resim(
                 cur_resim[i] - signal_std/2,
                 cur_resim[i] + signal_std/2
             )
-        base_selection_points = 8*[[SelectionPoints(loci=[(cur_pos, 0)])]]
         up_down_order = np.array([cur_up_down=='up'])
-        optimized_selection_points_per_cluster, _, _ = _optimize_selection_points(
-            n_iterations_optim, 
-            list(zip(*base_selection_points)), 
-            data_per_length_scale_, 
-            cur_chrom,
-            best_loss=np.inf, 
-            show_progress=False, 
-            N_iterations_base=0, 
-            segment_size_dict=segment_size_dict,
-            allow_pos_change=mode == 'top',
-            up_down_order=up_down_order,
-            blocked_distance_th=blocked_distance_th
-        )
-        optimized_selection_points = list(zip(*optimized_selection_points_per_cluster))
-        optimized_selection_points_raw = copy_list_of_selection_points(optimized_selection_points)
-        cur_pos = optimized_selection_points[0][0][0].pos
 
-        if within_ci_filtering:
-            optimized_selection_points = p_values_within_ci_filter(
+        if mode == 'top' and optimize_ls_separately:
+            # Each same-direction length scale gets its own top-residual position, blocking that
+            # length scale's CI region only (not the four-way intersection used by the joint path),
+            # and is optimized on its own via ls_to_optimize -- rather than jointly optimizing a
+            # single shared position across all four length scales.
+            loci_fitness_per_ls = {}
+            added_events_per_ls = {}
+            optimized_selection_points_per_ls = {}
+            optimized_selection_points_raw_per_ls = {}
+            for ls_name, ls_i in zip(LENGTH_SCALE_NAMES, length_scales_for_residuals):
+                cur_residuals_abs = np.abs(cur_residuals_upsampled[ls_i]).copy()
+
+                # Block telomeres and centromere
+                cur_residuals_abs[:telomere_block_start] = 0
+                cur_residuals_abs[telomere_block_end:] = 0
+                cur_residuals_abs[centromere_block_start:centromere_block_end] = 0
+
+                # Block regions that are within CI (for this length scale only)
+                cur_residuals_abs[ci_up[ls_i].astype(bool)] = 0
+
+                ls_pos = np.argmax(cur_residuals_abs) * segment_size_dict['small']
+
+                base_selection_points = 8*[[SelectionPoints(loci=[(ls_pos, 0)])]]
+                optimized_selection_points_per_cluster, _, _ = _optimize_selection_points(
+                    n_iterations_optim,
+                    list(zip(*base_selection_points)),
+                    data_per_length_scale_,
+                    cur_chrom,
+                    best_loss=np.inf,
+                    show_progress=False,
+                    N_iterations_base=0,
+                    segment_size_dict=segment_size_dict,
+                    allow_pos_change=True,
+                    up_down_order=up_down_order,
+                    blocked_distance_th=blocked_distance_th,
+                    ls_to_optimize=[ls_i]
+                )
+                optimized_selection_points = list(zip(*optimized_selection_points_per_cluster))
+                optimized_selection_points_raw = copy_list_of_selection_points(optimized_selection_points)
+                ls_pos = optimized_selection_points[0][0][0].pos
+
+                if within_ci_filtering:
+                    optimized_selection_points = p_values_within_ci_filter(
+                        cur_chrom,
+                        optimized_selection_points,
+                        cur_resim,
+                        data_per_length_scale
+                    )
+
+                all_events_at_pos = get_events_at_position_all_ls(data_per_length_scale_, cur_chrom, ls_pos)
+                cur_fitness = max(0.0, optimized_selection_points[ls_i][0][0].fitness)
+                loci_fitness_per_ls[ls_name] = cur_fitness
+                added_events_per_ls[ls_name] = (all_events_at_pos[ls_i] * cur_fitness) / (cur_fitness + 1)
+                optimized_selection_points_per_ls[ls_name] = optimized_selection_points
+                optimized_selection_points_raw_per_ls[ls_name] = optimized_selection_points_raw
+
+            added_events = float(np.sum(list(added_events_per_ls.values())))
+            # 'fitness' test statistic: mean optimized fitness over the four same-direction length
+            # scales, each optimized independently around its own top-residual position.
+            fitness_stat = float(np.mean(list(loci_fitness_per_ls.values())))
+
+            cur_results = {'added_events': added_events, 'fitness_stat': fitness_stat}
+            cur_results = {**cur_results,
+                           **{f'fit_{ls}': loci_fitness_per_ls[ls] for ls in LENGTH_SCALE_NAMES}
+            }
+
+            if save_all or (save_outliers is not None and added_events >= save_outliers):
+                cur_results = {
+                    **cur_results,
+                    **{
+                        'optimized_selection_points': optimized_selection_points_per_ls,
+                        'optimized_selection_points_raw': optimized_selection_points_raw_per_ls,
+                        'cur_resim': cur_resim
+                }}
+        else:
+            base_selection_points = 8*[[SelectionPoints(loci=[(cur_pos, 0)])]]
+            optimized_selection_points_per_cluster, _, _ = _optimize_selection_points(
+                n_iterations_optim,
+                list(zip(*base_selection_points)),
+                data_per_length_scale_,
                 cur_chrom,
-                optimized_selection_points,
-                cur_resim,
-                data_per_length_scale
+                best_loss=np.inf,
+                show_progress=False,
+                N_iterations_base=0,
+                segment_size_dict=segment_size_dict,
+                allow_pos_change=mode == 'top',
+                up_down_order=up_down_order,
+                blocked_distance_th=blocked_distance_th
             )
+            optimized_selection_points = list(zip(*optimized_selection_points_per_cluster))
+            optimized_selection_points_raw = copy_list_of_selection_points(optimized_selection_points)
+            cur_pos = optimized_selection_points[0][0][0].pos
 
-        all_events_at_pos = get_events_at_position_all_ls(data_per_length_scale_, cur_chrom, cur_pos)
-        loci_fitness = np.maximum(0, np.array([x[0][0].fitness for x in optimized_selection_points]))
-        added_events_ = (all_events_at_pos * loci_fitness) / (loci_fitness + 1)
-        added_events = np.sum(added_events_)
-        # 'fitness' test statistic: mean optimized fitness over the four same-direction length
-        # scales. Unlike added_events (which saturates via fitness/(fitness+1) and tracks event
-        # density), this is monotone in fitness, so the resulting p-value tracks selection strength.
-        fitness_stat = float(np.mean(loci_fitness[_DIR_SLOTS[cur_up_down]]))
+            if within_ci_filtering:
+                optimized_selection_points = p_values_within_ci_filter(
+                    cur_chrom,
+                    optimized_selection_points,
+                    cur_resim,
+                    data_per_length_scale
+                )
 
-        cur_results = {'added_events': added_events, 'fitness_stat': fitness_stat}
-        cur_results = {**cur_results,
-                       **{f'fit_{ls}': loci_fitness[_DIR_SLOTS[cur_up_down][i]]
-                          for i, ls in enumerate(LENGTH_SCALE_NAMES)}
-        }
-            
-        if save_all or (save_outliers is not None and added_events >= save_outliers):
-            cur_results = {
-                **cur_results,
-                **{
-                    'optimized_selection_points': optimized_selection_points,
-                    'optimized_selection_points_raw': optimized_selection_points_raw,
-                    'cur_resim': cur_resim
-            }}
+            all_events_at_pos = get_events_at_position_all_ls(data_per_length_scale_, cur_chrom, cur_pos)
+            loci_fitness = np.maximum(0, np.array([x[0][0].fitness for x in optimized_selection_points]))
+            added_events_ = (all_events_at_pos * loci_fitness) / (loci_fitness + 1)
+            added_events = np.sum(added_events_)
+            # 'fitness' test statistic: mean optimized fitness over the four same-direction length
+            # scales. Unlike added_events (which saturates via fitness/(fitness+1) and tracks event
+            # density), this is monotone in fitness, so the resulting p-value tracks selection strength.
+            fitness_stat = float(np.mean(loci_fitness[_DIR_SLOTS[cur_up_down]]))
+
+            cur_results = {'added_events': added_events, 'fitness_stat': fitness_stat}
+            cur_results = {**cur_results,
+                           **{f'fit_{ls}': loci_fitness[_DIR_SLOTS[cur_up_down][i]]
+                              for i, ls in enumerate(LENGTH_SCALE_NAMES)}
+            }
+
+            if save_all or (save_outliers is not None and added_events >= save_outliers):
+                cur_results = {
+                    **cur_results,
+                    **{
+                        'optimized_selection_points': optimized_selection_points,
+                        'optimized_selection_points_raw': optimized_selection_points_raw,
+                        'cur_resim': cur_resim
+                }}
         # Release this resim's deepcopy + numpy temporaries; over N_test iterations the cyclic
         # garbage otherwise outpaces the collector and OOMs (worse in top mode's deeper optimize).
         gc.collect()
@@ -277,7 +364,8 @@ def _observed_fitness_per_ls(cur_loci):
 
 
 def resim_null_for_chrom_type(cur_chrom, cur_type, data_per_length_scale, output_dir,
-                              N_random, n_iterations_optim, mode='random', overwrite=False, n_jobs=1):
+                              N_random, n_iterations_optim, mode='random', optimize_ls_separately=False,
+                              overwrite=False, n_jobs=1):
     """Load-or-compute (and cache) the resimulation null for one (chrom, type). The cache key is
     shared by every fitness p-value consumer -- assign_p_values (below) and the per-chromosome
     scatter that warms it -- so warming the caches in parallel lets the combine's assign_p_values
@@ -285,7 +373,8 @@ def resim_null_for_chrom_type(cur_chrom, cur_type, data_per_length_scale, output
     from spice.tsg_og.p_values import p_value_using_resim
     cache = os.path.join(
         output_dir, 'p_values',
-        f'{cur_chrom}_{cur_type}_N_random_{N_random}_N_optim_{n_iterations_optim}_mode_{mode}.pickle')
+        f'{cur_chrom}_{cur_type}_N_random_{N_random}_N_optim_{n_iterations_optim}_mode_{mode}'
+        f'_ls_separately_{optimize_ls_separately}.pickle')
     if not overwrite and os.path.exists(cache):
         logger.info(f"Loading p-values for {cur_chrom} ({cur_type}) from cache")
         return open_pickle(cache)
@@ -293,7 +382,7 @@ def resim_null_for_chrom_type(cur_chrom, cur_type, data_per_length_scale, output
     results = p_value_using_resim(
         cur_chrom=cur_chrom, cur_up_down='up' if cur_type == 'OG' else 'down', N_test=N_random,
         data_per_length_scale=data_per_length_scale, n_iterations_optim=n_iterations_optim,
-        mode=mode, n_jobs=n_jobs)
+        mode=mode, optimize_ls_separately=optimize_ls_separately, n_jobs=n_jobs)
     os.makedirs(os.path.dirname(cache), exist_ok=True)
     save_pickle(results, cache)
     return results
