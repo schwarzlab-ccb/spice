@@ -9,6 +9,7 @@ import numpy as np
 from spice import data_loaders, directories, config
 from spice.utils import open_pickle, CALC_NEW
 from spice.logging import log_debug, get_logger
+from spice.random_state import derive_seed, np_rng, seed_task
 from spice.tsg_og.simulation import (
     SelectionPoints, create_convolution_kernel, create_centromere_values, Locus,
     convolution_simulation, combine_selection_points, copy_list_of_selection_points,
@@ -242,12 +243,12 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
     for iteration in range(N_iterations):
         # Choose a cluster index to modify (the first N_iteration_base ones only optimize last one)
         cur_cluster_i = (len(best_selection_points_per_cluster) - 1 if (iteration < N_iterations_base and not final_iteration)
-                         else np.random.choice(loci_to_optimize))
+                         else np_rng().choice(loci_to_optimize))
         cur_cluster_pos = best_selection_points_per_cluster[cur_cluster_i][0][0].pos
         cur_cluster_fitness = [x[0].fitness for x in best_selection_points_per_cluster[cur_cluster_i]]
 
         # Randomly adjust position (10% of the time) or fitness (90% of the time)
-        pos_change = max_pos_change * np.random.uniform(-1, 1) if np.random.random() < (allow_pos_change * 0.1) else 0
+        pos_change = max_pos_change * np_rng().uniform(-1, 1) if np_rng().random_sample() < (allow_pos_change * 0.1) else 0
         new_cluster_pos = cur_cluster_pos + pos_change
 
         # Check proximity to blocked positions
@@ -271,7 +272,7 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
             if not allowed_fitness_change[:, cur_cluster_i].any():
                 continue
             # 50% chance to adjust fitness based on residuals or randomly
-            if generated_signals[0] is not None and np.random.random() < 0.5:
+            if generated_signals[0] is not None and np_rng().random_sample() < 0.5:
                 fitness_diff = np.array([(data['signals'] - generated_signal)[int(cur_cluster_pos // segment_size_dict[data['length_scale']])] / 
                                         (data['signals'][int(cur_cluster_pos // segment_size_dict[data['length_scale']])] + 1e-10)
                                          for data, generated_signal in
@@ -279,9 +280,9 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
             else:
                 fitness_diff = np.ones(8)
 
-            cur_fitness_ls_i = np.random.choice(np.where(allowed_fitness_change[:, cur_cluster_i])[0])
+            cur_fitness_ls_i = np_rng().choice(np.where(allowed_fitness_change[:, cur_cluster_i])[0])
             fitness_diff = np.array([x if i == cur_fitness_ls_i else 0 for i, x in enumerate(fitness_diff)])
-            fitness_change = np.maximum(cur_cluster_fitness, 1) * fitness_diff * np.random.uniform()
+            fitness_change = np.maximum(cur_cluster_fitness, 1) * fitness_diff * np_rng().uniform()
             new_fitness_values = np.minimum(cur_cluster_fitness + fitness_change, max_fitness)
             if up_down_order is not None and len(up_down_order) > 0:
                 # up: pos gains and neg losses
@@ -648,7 +649,13 @@ def rank_loci(
         def _optimize_cluster(cluster_i, iteration, fixed_clusters):
             if cluster_i in fixed_cluster_i:
                 return None, None
-            
+
+            # Seeded per (chrom, iteration, cluster): joblib workers are separate processes with
+            # their own RNG state, so without this each cluster's optimisation would be drawn from
+            # OS entropy. Keyed on identity rather than call order so a cluster's result is the same
+            # serial or parallel, and at any n_cores.
+            seed_task(derive_seed('rank_loci', cur_chrom, iteration, cluster_i))
+
             cur_selection_points = [[x[cluster_i]] for x in best_selection_points]
             cur_selection_points = copy_list_of_selection_points([list(x) + list(y) for x, y in zip(fixed_clusters, cur_selection_points)])
             cur_selection_points_per_cluster = list(zip(*cur_selection_points))
@@ -1053,6 +1060,9 @@ def infer_loci_widths(
         cur_chrom, data_per_length_scale, final_selection_points, segment_size_dict=segment_size_dict)
 
     def __optimize_for_bootstrap_iteration(bootstrap_iteration, cluster_i):
+        # Per-task stream, keyed on the bootstrap iteration and locus this call stands for (see
+        # _optimize_cluster above): reproducible across processes and independent of n_jobs.
+        seed_task(derive_seed('infer_loci_widths', cur_chrom, cluster_i, bootstrap_iteration))
         mod_data_per_length_scale = deepcopy(data_per_length_scale)
         for ls_i in range(8):
             ls_key = list(mod_data_per_length_scale.keys())[ls_i]
@@ -1613,4 +1623,4 @@ def calc_acceptance(new_loss, current_loss, iteration, max_iter, T_schedule='min
         else:
             raise ValueError(f"Invalid temperature schedule: {T_schedule}")
         
-        return np.random.uniform(0, 1) < acceptance_prob
+        return np_rng().uniform(0, 1) < acceptance_prob

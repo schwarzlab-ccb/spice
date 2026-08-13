@@ -13,6 +13,22 @@ from spice.utils import save_pickle, open_pickle
 # No other SPICE imports here!
 
 
+def _apply_seed(args, logger):
+    """Fix this run's RNG seed: --seed, else params.seed from the config, else the default.
+
+    Every SPICE command is stochastic, so this is what makes a run repeatable; see
+    spice.random_state for what the seed does and does not cover (wall-clock limits and
+    PYTHONHASHSEED are outside it).
+    """
+    from spice import config
+    from spice.random_state import set_seed
+
+    cli_seed = getattr(args, 'seed', None)
+    seed = set_seed(cli_seed if cli_seed is not None else config['params'].get('seed'))
+    logger.info(f'Random seed: {seed} (from {"--seed" if cli_seed is not None else "config params.seed"})')
+    return seed
+
+
 def main_event_inference(args):
     """Run event inference pipeline."""
     # Handle 'all' or empty arguments, and expand trailing + syntax (e.g., split+)
@@ -180,6 +196,7 @@ def main_event_inference(args):
 
     logger.info('Running SPICE: Selection Patterns In somatic Copy-number Events')
     logger.info(f'Running event inference for project name {name} with config file {args.config_path}')
+    _apply_seed(args, logger)
 
     logger.info(f'Results will be stored in {results_events_dir}')
     logger.info(f'Running the following steps: {", ".join(which)}')
@@ -243,8 +260,10 @@ def main_event_inference(args):
         skip_existing = config['params'].get('skip_existing', False)
         for wgd_status in ['nowgd', 'wgd']:
             is_wgd = (wgd_status == 'wgd')
+            # sorted: os.listdir returns filesystem order, so the work order (and every log line
+            # and fail-report row derived from it) would otherwise vary between identical runs.
             cur_ids = [x.replace('.pickle', '')
-                    for x in os.listdir(os.path.join(str(results_events_dir), wgd_status, 'chrom_data_full'))]
+                    for x in sorted(os.listdir(os.path.join(str(results_events_dir), wgd_status, 'chrom_data_full')))]
             if selected_ids is not None:
                 cur_ids = [x for x in cur_ids if x in selected_ids]
 
@@ -285,7 +304,7 @@ def main_event_inference(args):
                 continue
             is_wgd = (wgd_status == 'wgd')
             cur_ids = [x.replace('.pickle', '')
-                    for x in os.listdir(os.path.join(str(results_events_dir), wgd_status, 'full_paths_multiple_solutions'))]
+                    for x in sorted(os.listdir(os.path.join(str(results_events_dir), wgd_status, 'full_paths_multiple_solutions')))]
             if selected_ids is not None:
                 cur_ids = [x for x in cur_ids if x in selected_ids]
             def run_knn(cur_id):
@@ -320,7 +339,7 @@ def main_event_inference(args):
                 continue
             is_wgd = (wgd_status == 'wgd')
             cur_ids = [x.replace('.pickle', '')
-                    for x in os.listdir(os.path.join(str(results_events_dir), wgd_status, 'chrom_data_large'))]
+                    for x in sorted(os.listdir(os.path.join(str(results_events_dir), wgd_status, 'chrom_data_large')))]
             if selected_ids is not None:
                 cur_ids = [x for x in cur_ids if x in selected_ids]
 
@@ -406,6 +425,7 @@ def main_plotting(args):
 
     logger.info('Running SPICE: Plotting Mode')
     logger.info(f'Plotting for project name {name} with config file {args.config_path}')
+    _apply_seed(args, logger)
 
     # Load required inputs based on mode
     if args.plot_events_per_sample is not None:
@@ -533,6 +553,7 @@ def main_loci_detection(args):
 
     logger.info('Running SPICE: Loci Detection Mode (De-Novo)')
     logger.info(f'Project name: {config["name"]}')
+    _apply_seed(args, logger)
     
     # Handle snakemake mode
     if args.snakemake:
@@ -733,6 +754,7 @@ def main_loci_assignment(args):
 
     logger.info('Running SPICE: Loci Assignment Mode')
     logger.info(f'Project name: {config["name"]}')
+    _apply_seed(args, logger)
     
     # Run loci assignment pipeline
     from spice.main_loci_functions import loci_assignment, process_final_events_for_loci_routines
@@ -848,6 +870,13 @@ Examples:
         '--debug',
         action='store_true',
         help='Enable DEBUG logging globally, overriding config logging_level'
+    )
+    common_parser.add_argument(
+        '--seed',
+        type=int,
+        default=None,
+        help='Base RNG seed, overriding "seed" in the config params. Every random draw derives from '
+             'it, so the same seed on the same input reproduces the run (see spice.random_state).'
     )
     
     # ===== EVENT INFERENCE SUBPARSER =====
@@ -1000,7 +1029,7 @@ Examples:
         '--loci-steps',
         nargs='+',
         default=None,
-        help='Steps to run. If not present will use "loci_steps" from config. Use "fast" for accelerated mode, "all" or "default" for full pipeline, or a trailing + (e.g., split+) to run that step and all subsequent steps.'
+        help='Steps to run. If not present will use "loci_steps" from config. Use "fast" for the accelerated subset, "full" for the full pipeline, or a trailing + (e.g., split+) to run that step and all subsequent steps.'
     )
     parser_loci.add_argument(
         '--cores', '-j',

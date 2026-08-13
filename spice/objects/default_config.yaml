@@ -5,6 +5,11 @@ directories:
   plot_dir: 'plots'
 
 params:
+  # Base RNG seed. Every random draw in SPICE derives from it (see spice/random_state.py), so the
+  # same seed on the same input reproduces a run; change it to get an independent replicate.
+  # Overridable per command with --seed. Caveats: wall-clock limits (time_limit_*) and an unset
+  # PYTHONHASHSEED can still make runs differ.
+  seed: 42
   # Logging
   logging_level: "INFO"
   # Input data

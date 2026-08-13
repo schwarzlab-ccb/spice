@@ -105,7 +105,7 @@ def create_knn_train_data(output_file, knn_train_data_ext=None, full_paths_singl
             if not os.path.exists(cur_dir):
                 logger.warning(f'{cur_dir} does not exist, skipping')
                 continue
-            for cur_file in os.listdir(cur_dir):
+            for cur_file in sorted(os.listdir(cur_dir)):   # sorted: listdir order is filesystem order
                 if not cur_file.endswith('.pickle'):
                     continue
                 cur_events = open_pickle(os.path.join(cur_dir, cur_file), fail_if_nonexisting=True)
@@ -313,7 +313,9 @@ def combine_final_events(solved_dirs, chrom_segments_file=None, sv_data=None,
         cur_dir_name = '/'.join(cur_dir.split('/')[-2:])
         log_debug(logger, f'Directory {cur_dir_i+1}/{len(solved_dirs)}: {cur_dir}')
         n_files = len(os.listdir(os.path.join(cur_dir)))
-        for i, cur_file in enumerate(os.listdir(os.path.join(cur_dir))):
+        # sorted: this loop fixes the row order of final_events.tsv, and os.listdir returns
+        # filesystem order -- which differs between two otherwise identical runs.
+        for i, cur_file in enumerate(sorted(os.listdir(os.path.join(cur_dir)))):
             if not cur_file.endswith('.pickle'):
                 continue
             log_debug(logger, f'Directory {cur_dir_i+1}/{len(solved_dirs)}, file {i+1}/{n_files} ({100*(i+1)/n_files:.2f}%): {cur_file} from {cur_dir_name}')

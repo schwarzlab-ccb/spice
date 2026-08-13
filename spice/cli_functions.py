@@ -4,6 +4,7 @@ import pandas as pd
 from joblib import Parallel, delayed
 
 from spice.logging import log_debug
+from spice.random_state import derive_seed, seed_task
 
 
 def save_fail_reports(failed_reports, results_dir=None, cur_step=None, logger=None):
@@ -119,6 +120,17 @@ def _run_batch(cur_ids, cores, desc, func, logger):
     n_jobs = cores if (cores is not None and cores > 1) else 1
     logger.info(f"{desc}: running on {n_jobs} core(s) for {len(cur_ids)} items")
 
+    def _seeded(cid):
+        """Run one task on its own RNG stream, keyed on (step, id).
+
+        Keyed on identity rather than call order, so a sample's result does not depend on --cores,
+        on which chunk it was scattered into, or on re-running that sample alone. This is also what
+        makes the threading backend below safe: np_rng()/py_rng() are per-thread, so seeding here
+        gives each task a private stream instead of letting interleaved threads share one.
+        """
+        seed_task(derive_seed(desc, cid))
+        return func(cid)
+
     def _format_exception(e: Exception) -> str:
         etype = type(e).__name__
         msg = str(e)
@@ -133,7 +145,7 @@ def _run_batch(cur_ids, cores, desc, func, logger):
     if n_jobs == 1:
         def _safe_func(cid):
             try:
-                return func(cid)
+                return _seeded(cid)
             except Exception as e:
                 logger.error(f"{desc}: failed for id '{cid}'", exc_info=False)
                 return {"id": cid, "status": "failed", "error": _format_exception(e), "step": desc}
@@ -151,7 +163,7 @@ def _run_batch(cur_ids, cores, desc, func, logger):
         log_every = max(10, len(cur_ids) // 10)
         def _safe_func_parallel(cid):
             try:
-                result = func(cid)
+                result = _seeded(cid)
             except Exception as e:
                 logger.error(f"{desc}: failed for id '{cid}'", exc_info=False)
                 result = {"id": cid, "status": "failed", "error": _format_exception(e), "step": desc}

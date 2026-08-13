@@ -12,6 +12,7 @@ import fstlib
 from spice import config
 from spice.utils import create_full_df_from_diff_df, chrom_id_from_id
 from spice.logging import get_logger, log_debug
+from spice.random_state import np_rng
 from spice.event_inference.fst_assets import get_diploid_fsa, T_forced_WGD
 from spice.event_inference.fsts import fsa_from_string
 from spice.event_inference.data_structures import Diff, FullPaths
@@ -21,6 +22,19 @@ diploid_fsa = get_diploid_fsa(total_copy_numbers=False)
 diploid_fsa_total_cn = get_diploid_fsa(total_copy_numbers=True)
 
 logger = get_logger(__name__)
+
+
+def _make_solver_deterministic(solver):
+    """Pin a CP-SAT solver to a reproducible search.
+
+    Two things make the default solver non-reproducible: it seeds its own search randomly, and it
+    runs a portfolio of strategies in parallel workers, so which solution comes back first (and in
+    which order `enumerate_all_solutions` yields them) is a race. One worker plus a seed drawn from
+    this thread's stream fixes both. Note this does not save a run that hits `max_time_in_seconds`:
+    a wall-clock cutoff is non-deterministic by construction.
+    """
+    solver.parameters.random_seed = int(np_rng().randint(0, 2 ** 31 - 1))
+    solver.parameters.num_workers = 1
 
 
 def full_paths_from_graph_with_sv(cur_id, is_wgd, sv_data, chrom_segments, chrom,
@@ -66,12 +80,19 @@ def full_paths_from_graph_with_sv(cur_id, is_wgd, sv_data, chrom_segments, chrom
             sv_matching_threshold=sv_matching_threshold,
             total_cn=total_cn,
             **kwargs)
-    unique_events = {i: d for i, d in enumerate(set(item for sublist in diffs for item in sublist))}
+    # sorted(), not raw set order: Diff carries string fields, and CPython randomises string hashing
+    # per process, so `enumerate(set(...))` handed out a different index to each event on every run.
+    # Those indices are what the solution Counters, the pickled FullPaths and ultimately the row
+    # order of final_events.tsv are built from -- the one thing a fixed seed could not pin down.
+    unique_events = {i: d for i, d in enumerate(sorted(set(item for sublist in diffs for item in sublist)))}
     unique_events_reversed = {v: k for k, v in unique_events.items()}
     diffs = [[unique_events_reversed[event] for event in diff] for diff in diffs]
     solutions = [Counter(diff) for diff in diffs]
     # this is necessary because LOHs can create duplicate solutions (e.g. for profile 010)
-    unique_solutions = [Counter({k: v for k, v in x}) for x in {frozenset(c.items()) for c in solutions}]
+    # sorted for the same reason: the de-duplicating set is iterated, so its order would otherwise
+    # decide the order of the solution list.
+    unique_solutions = [Counter({k: v for k, v in x})
+                        for x in sorted({frozenset(c.items()) for c in solutions}, key=sorted)]
     log_debug(logger, f"Found {len(unique_events)} unique events")
     log_debug(logger, f"Found {len(solutions)} solutions of which {len(unique_solutions)} are unique")
     assert all([solution.total() == (chrom.n_events) for solution in unique_solutions]), f"expected nr of events: {chrom.n_events}. nr of events per solution: {[solution.total() for solution in unique_solutions]}"
@@ -519,7 +540,7 @@ def create_random_start_end_pairs(starts, ends, n_paths, pre_selected_events=Non
     else:
         pre_selected_events = []
 
-    random_ends = ends[np.argsort(np.random.rand(n_paths, len(ends)), axis=1)]
+    random_ends = ends[np.argsort(np_rng().rand(n_paths, len(ends)), axis=1)]
     events = [pre_selected_events + [(s, e) for s, e in zip(starts, cur_ends)] for cur_ends in random_ends]
 
     return events
@@ -613,7 +634,7 @@ def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, t
 
         cur_diff = cur_diff.copy()
         if shuffle_diffs:
-            cur_diff = cur_diff[np.random.choice(np.arange(len(cur_diff)), len(cur_diff), replace=False)]
+            cur_diff = cur_diff[np_rng().choice(np.arange(len(cur_diff)), len(cur_diff), replace=False)]
 
         model = cp_model.CpModel()
         n_events = len(cur_diff)
@@ -716,6 +737,7 @@ def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, t
                 # logger.debug('/////////////') # should be commented out to save time
 
         solver = cp_model.CpSolver()
+        _make_solver_deterministic(solver)
         if single_time_limit is not None:
             solver.parameters.max_time_in_seconds = single_time_limit
         solver_solutions = CpSolverSolutionArray(order, silent=True)
@@ -732,7 +754,7 @@ def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, t
 
         cp_solutions = np.array(solver_solutions.all_solutions)
         if not return_all_solutions:
-            cp_solutions = cp_solutions[np.random.choice(range(len(cp_solutions)), 1)]
+            cp_solutions = cp_solutions[np_rng().choice(range(len(cp_solutions)), 1)]
 
         unique_results = set()
         for cur_solution_ in cp_solutions:
@@ -775,8 +797,8 @@ def loh_filters_for_graph_result_diffs_wgd(
 
     for n, cur_diff in enumerate(diffs):
         if shuffle_diffs:
-            cur_diff = [cur_diff[0][np.random.choice(np.arange(len(cur_diff[0])), len(cur_diff[0]), replace=False)],
-                        cur_diff[1][np.random.choice(np.arange(len(cur_diff[1])), len(cur_diff[1]), replace=False)]]
+            cur_diff = [cur_diff[0][np_rng().choice(np.arange(len(cur_diff[0])), len(cur_diff[0]), replace=False)],
+                        cur_diff[1][np_rng().choice(np.arange(len(cur_diff[1])), len(cur_diff[1]), replace=False)]]
 
         model = cp_model.CpModel()
         n_pre = len(cur_diff[0])
@@ -824,6 +846,7 @@ def loh_filters_for_graph_result_diffs_wgd(
                 model.AddAtLeastOne(loh_fulfilled)
 
         solver = cp_model.CpSolver()
+        _make_solver_deterministic(solver)
         # if single_time_limit is not None:
         #     solver.parameters.max_time_in_seconds = single_time_limit
         solver_solutions = CpSolverSolutionArray(order_pre + order_post, silent=True)

@@ -91,6 +91,30 @@ For other parameters that can be modified, see `default_config.yaml`.
    - If relative, SPICE resolves them against `directories.base_dir`.
    - If absolute, SPICE uses them as-is.
 
+### 1.3 Reproducibility (`params.seed`)
+
+Every SPICE step is stochastic (MCMC over event orders, resimulated nulls, bootstrap resampling,
+randomised tie-breaks). All of it derives from a single base seed, `params.seed` (default 42),
+overridable per command with `--seed`; the seed in use is written to the log at startup. Re-running
+the same command on the same input with the same seed reproduces the results; change the seed to get
+an independent replicate.
+
+The seed is threaded through parallel work as well, so results do not depend on `--cores`: each task
+(a sample, a chromosome, a bootstrap iteration, a resimulation) gets its own stream keyed on *what
+it is* rather than on when it ran. Detecting loci on `chr7` alone therefore gives the same answer as
+detecting it as part of a whole-genome run, which is what makes scattering the work over a cluster
+safe. See `spice/random_state.py` for the mechanism.
+
+Two things fall outside the seed:
+
+- **Wall-clock limits.** `params.time_limit_all_solutions` / `time_limit_mcmc` (and CP-SAT's
+  internal time limit) make the result depend on machine speed and load. Leave them unset for
+  reproducible runs.
+- **`PYTHONHASHSEED`.** Python salts string hashes per process, which reorders iteration over sets
+  of strings. The one place where this decided results — the event index map built from a set of
+  `Diff`s in `events_from_graph`, which fixed the row order of `final_events.tsv` — is now sorted
+  explicitly, so runs are reproducible without it. Exporting `PYTHONHASHSEED=0` remains a cheap
+  belt-and-braces guard against a set-of-strings ordering creeping back in.
 
 ## 2. Usage Overview
 
@@ -158,8 +182,8 @@ SPICE expects tab-separated input files with copy-number segments. See example f
 - `cn_b`: Copy number for allele B (haplotype-specific)
 
 **Optional files:**
-- `wgd_status`: TSV with WGD status per sample (see section 1.3)
-- `xy_status`: TSV with sex status per sample (see section 1.4)
+- `wgd_status`: TSV with WGD status per sample (see section 3.2.2)
+- `xy_status`: TSV with sex status per sample (see section 3.2.3)
 - `sv`: Pickle file (`.pickle`) with SV calls used for SV-constrained event matching (see section 3.2.4)
 
 Total copy-number mode can be enabled by setting `params.total_cn: True` in the config file.
@@ -258,7 +282,7 @@ The preprocessing step runs only when `--run-preprocessing` is provided and prep
 
 - Data normalization: ensures chromosome names use `chr` prefix; converts starts/ends to integers and adjusts starts to 0-based.
 - CN capping and filtering: caps copy numbers at 8; removes segments shorter than 1kb.
-- WGD resolution: loads from `wgd_status.tsv` or infers as described in section 1.3.
+- WGD resolution: loads from `wgd_status.tsv` or infers as described in section 3.2.2.
 - Sex resolution: loads from `xy_status.tsv` or infers by presence of `chrY`; for XY samples with haplotype-specific CN, sets minor CN of `chrX` and `chrY` to 0.
 - Neighbor merging: merges adjacent segments with identical CNs to reduce fragmentation.
 - Telomeres and centromeres: fills telomeric regions and optionally bins/unifies centromeres (can be skipped with `--pre-skip-centromeres`).

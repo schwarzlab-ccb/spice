@@ -8,6 +8,7 @@ import numpy as np
 from joblib import Parallel, delayed
 
 from spice import data_loaders
+from spice.random_state import derive_seed, get_seed, np_rng, seed_task
 from spice.utils import get_logger, open_pickle, save_pickle
 from spice.segmentation import get_events_at_position_all_ls
 from spice.tsg_og.simulation import resimulate_events_multiple, copy_list_of_selection_points
@@ -81,15 +82,14 @@ def p_value_using_resim(
 
     def _run_one_resim(iteration):
         '''
-        Deterministic per-resim seed on the GLOBAL numpy RNG (the resim + optimize stack --
-        resimulate_events_multiple, the detection MCMC, the positional sampling below -- all draw
-        from np.random, so seeding it is what controls them). This is only correct under a PROCESS
-        backend (loky/multiprocessing), where each worker has its own global RNG: workers then draw
-        independent, reproducible nulls (direction offset keeps the gain/loss tracks independent).
-        Under a THREADING backend the global RNG is shared and np.random.seed() races across
-        threads -> correlated/duplicated nulls, so the Parallel() below pins backend='loky'.
+        Deterministic per-resim stream, keyed on (chrom, direction, iteration) under the run's base
+        seed. The whole resim + optimize stack below (resimulate_events_multiple, the detection
+        MCMC, the positional sampling) draws from this thread's generators, so seeding them here is
+        what controls the null. Keying on identity rather than call order means resim i is the same
+        null draw whether it ran serially, in worker 3 of 8, or in a re-run of one chromosome; the
+        chrom+direction in the key keeps the gain/loss tracks independent of each other.
         '''
-        np.random.seed(int(iteration) + (0 if cur_up_down == 'up' else 5_000_000))
+        seed_task(derive_seed('p_value_resim', cur_chrom, cur_up_down, iteration))
         if log_progress:
             logger.info(f'Starting iteration {iteration+1} / {N_test}')
         resim = resimulate_events_multiple(
@@ -137,13 +137,13 @@ def p_value_using_resim(
             p_arm_length = CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_start']
             q_arm_length = (CHROM_LENS.loc[cur_chrom] -
                             CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end'])
-            is_p_arm = np.random.choice(
+            is_p_arm = np_rng().choice(
                 [True, False],
                 p=[p_arm_length/(p_arm_length+q_arm_length), q_arm_length/(p_arm_length+q_arm_length)])
             if is_p_arm:
-                cur_pos = np.random.randint(1e6, CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_start']-1e6)
+                cur_pos = np_rng().randint(1e6, CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_start']-1e6)
             else:
-                cur_pos = np.random.randint(
+                cur_pos = np_rng().randint(
                     CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end']+1e6,
                     CHROM_LENS.loc[cur_chrom]-1e6)
         else:
@@ -295,10 +295,10 @@ def p_value_using_resim(
     # The resims are independent, so parallelise across n_jobs workers (each runs its resims
     # sequentially, single-core) -- this uses the cores nextflow allocates to LOCI_DETECT_CHROM
     # instead of leaving 7/8 idle. n_jobs<=1 keeps the original sequential path.
-    # backend='loky' is REQUIRED, not incidental: _run_one_resim seeds the global numpy RNG, which is
-    # only safe with per-process RNG state (see the seed comment above). An explicit backend also
-    # overrides any ambient parallel_backend() context, so a threading backend can't silently correlate
-    # the nulls.
+    # backend='loky' is kept explicit so an ambient parallel_backend() context can't change how this
+    # runs. It is no longer load-bearing for the RNG: _run_one_resim seeds its own thread/process
+    # stream (see the seed comment above), so the nulls stay independent under either backend --
+    # processes just also keep one resim's memory churn out of the others' way.
     if n_jobs and n_jobs > 1:
         results = Parallel(n_jobs=n_jobs, backend='loky')(delayed(_run_one_resim)(i) for i in range(N_test))
     else:
@@ -369,12 +369,16 @@ def resim_null_for_chrom_type(cur_chrom, cur_type, data_per_length_scale, output
     """Load-or-compute (and cache) the resimulation null for one (chrom, type). The cache key is
     shared by every fitness p-value consumer -- assign_p_values (below) and the per-chromosome
     scatter that warms it -- so warming the caches in parallel lets the combine's assign_p_values
-    reuse the nulls without re-simulating. `data_per_length_scale` is one chromosome's dict."""
+    reuse the nulls without re-simulating. `data_per_length_scale` is one chromosome's dict.
+
+    The base seed is part of the cache key: the null is a function of it, so re-running under a new
+    seed to get an independent replicate has to resimulate rather than silently reload the old
+    null."""
     from spice.tsg_og.p_values import p_value_using_resim
     cache = os.path.join(
         output_dir, 'p_values',
         f'{cur_chrom}_{cur_type}_N_random_{N_random}_N_optim_{n_iterations_optim}_mode_{mode}'
-        f'_ls_separately_{optimize_ls_separately}.pickle')
+        f'_ls_separately_{optimize_ls_separately}_seed_{get_seed()}.pickle')
     if not overwrite and os.path.exists(cache):
         logger.info(f"Loading p-values for {cur_chrom} ({cur_type}) from cache")
         return open_pickle(cache)

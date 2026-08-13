@@ -12,6 +12,7 @@ from spice.length_scales import DEFAULT_LENGTH_SCALE_BOUNDARIES
 from spice.utils import (open_pickle, save_pickle, CALC_NEW,
                          calc_telomere_bound_whole_arm_whole_chrom)
 from spice.logging import log_debug, get_logger
+from spice.random_state import derive_seed, seed_task
 from spice.tsg_og.detection import (
     collect_data_per_length_scale, detect_tsgs_ogs_for_all_length_scales, rank_loci, within_ci_fitness_filter,
     flip_up_down_assignment, final_optimization_step, limiting_fitness, infer_loci_widths, merge_overlapping_loci,
@@ -101,6 +102,11 @@ def run_loci_detection_per_chrom(
         Threshold for locus prominence filtering
     """
     
+    # One stream per chromosome, so a chromosome's loci are the same whether it was detected on its
+    # own (the pipeline scatters chr1-22 into separate jobs) or as part of a serial multi-chromosome
+    # run, where it would otherwise inherit wherever the previous chromosome left the stream.
+    seed_task(derive_seed('loci_detection', cur_chrom))
+
     # Define all available steps
     which_options = [
         'detection',
@@ -907,7 +913,10 @@ def run_loci_assignment_per_chrom(
         (selection_points, loci_widths)
     """
     logger.info(f'Running loci assignment for {cur_chrom}')
-    
+
+    # Per-chromosome stream, as in run_loci_detection_per_chrom above.
+    seed_task(derive_seed('loci_assignment', cur_chrom))
+
     output_dir = os.path.join(loci_results_dir, 'assignment', cur_chrom)
     os.makedirs(output_dir, exist_ok=True)
     

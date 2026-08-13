@@ -1,6 +1,5 @@
 from collections import Counter, namedtuple, defaultdict
 import os
-import random
 import heapq
 from functools import cache
 
@@ -14,6 +13,7 @@ from spice.utils import (
     open_pickle, save_pickle, chrom_id_from_id, CALC_NEW, create_full_df_from_diff_df,
     calc_telomere_bound_whole_arm_whole_chrom)
 from spice.logging import log_debug, get_logger
+from spice.random_state import np_rng, py_rng
 from spice.event_inference.knn_graph import calc_event_distances, EventDistData
 from spice.data_loaders import load_chrom_lengths, load_centromeres
 from spice.event_inference.events_from_graph import (
@@ -243,8 +243,8 @@ def mcmc_event_selection(
             T = 10**(min_T + iteration/n_iterations * (max_T-min_T))
         acceptance = (force_accept or
                       (cur_score < best_score) or
-                      (simulated_annealing and (np.random.random() < np.exp((best_score - cur_score) / T))) or
-                      (not simulated_annealing and (np.random.random() < np.exp((best_score - cur_score) / acceptance_temp))))
+                      (simulated_annealing and (np_rng().random_sample() < np.exp((best_score - cur_score) / T))) or
+                      (not simulated_annealing and (np_rng().random_sample() < np.exp((best_score - cur_score) / acceptance_temp))))
 
         if acceptance:
             logger.debug(f'{iteration}: proposal accepted (old: {best_score}, new: {cur_score})')
@@ -416,7 +416,7 @@ def _create_mcmc_proposal_wgd(cur_events, iteration, cn_profile, swap_event_base
 
     n = 0
     while new_events is None:
-        random_var = random.choice(range(7))
+        random_var = py_rng().choice(range(7))
         if random_var == 0:
             new_events = proposal_wgd_add_bp(cur_events, cn_profile, total_cn=total_cn)
             cur_transition = 'add_bp'
@@ -460,7 +460,7 @@ def _create_mcmc_proposal_nowgd(best_events, iteration, swap_event_based_on_scor
     else:
         p = np.ones(len(best_events)) / len(best_events)
     
-    ind1, ind2 = np.random.choice(range(len(best_events)), 2, replace=False, p=p)
+    ind1, ind2 = np_rng().choice(range(len(best_events)), 2, replace=False, p=p)
     event_proposal[(ind1, ind2), 1] = best_events[(ind2, ind1), 1]
 
     return event_proposal
@@ -786,12 +786,12 @@ def proposal_wgd_simple_swap(cur_events, swap_event_based_on_score=False, event_
     pre_post = [label for label, events in zip(['pre', 'post'], cur_events) if len(events) >= 2]
     if len(pre_post) == 0:
         return None
-    pre_post = random.choice(pre_post)
+    pre_post = py_rng().choice(pre_post)
     pre_post_ind = 0 if pre_post == 'pre' else 1
     new_events = _deepcopy_fast(cur_events, has_wgd=True)
 
-    # ind1, ind2 = random.sample(range(len(new_events[pre_post_ind])), 2)
-    ind1, ind2 = np.random.choice(range(len(new_events[pre_post_ind])), size=2, p=p[pre_post_ind])
+    # ind1, ind2 = py_rng().sample(range(len(new_events[pre_post_ind])), 2)
+    ind1, ind2 = np_rng().choice(range(len(new_events[pre_post_ind])), size=2, p=p[pre_post_ind])
     cur = (new_events[pre_post_ind][ind1][0], new_events[pre_post_ind][ind2][1])
     new_events[pre_post_ind][ind2] = (new_events[pre_post_ind][ind2][0], new_events[pre_post_ind][ind1][1])
     new_events[pre_post_ind][ind1] = cur
@@ -832,14 +832,14 @@ def proposal_wgd_add_bp(cur_events, cn_profile, total_cn=False):
         return None
 
     # select a doubled bp
-    cur_bp, start_end = random.choice(doubled_starts + doubled_ends)
+    cur_bp, start_end = py_rng().choice(doubled_starts + doubled_ends)
     start_end_i = 0 if start_end == 'start' else 1
 
     # select two events with this bp
     cur_events_with_bp = [event for event in cur_events[1] if event[start_end_i] == cur_bp]
     if len(cur_events_with_bp) < 2:
         return None
-    cur_event_to_double, other_event_with_bp = random.sample(cur_events_with_bp, 2)
+    cur_event_to_double, other_event_with_bp = py_rng().sample(cur_events_with_bp, 2)
 
     if cur_event_to_double[0] > cur_event_to_double[1]:
         if not _added_pre_loss_passes_loh_filter(cur_events, cur_event_to_double, cn_profile, which='add_bp', total_cn=total_cn):
@@ -887,7 +887,7 @@ def proposal_wgd_remove_bp(cur_events, cn_profile, total_cn=False):
     if len(cur_pre_gains_start) + len(cur_pre_gains_end) + len(cur_pre_losses_start) + len(cur_pre_losses_end) == 0:
         return None
 
-    cur_pre_event, gain_loss, start_end = random.choice(
+    cur_pre_event, gain_loss, start_end = py_rng().choice(
         cur_pre_gains_start + cur_pre_gains_end + cur_pre_losses_start + cur_pre_losses_end)
     start_end_i = 0 if start_end == 'start' else 1
     start_end_j = 1 if start_end == 'start' else 0
@@ -900,7 +900,7 @@ def proposal_wgd_remove_bp(cur_events, cn_profile, total_cn=False):
     cur_post_events = [event for event in cur_events[1] if event[start_end_j] == cur_doubled_bp]
     if len(cur_post_events) == 0:
         return None
-    cur_post_event = random.choice(cur_post_events)
+    cur_post_event = py_rng().choice(cur_post_events)
 
     event_proposal = _create_proposal_from_cur_events(
         cur_events, remove_pre=[cur_pre_event], remove_post=[cur_post_event],
@@ -975,7 +975,7 @@ def proposal_wgd_extend_shorten_pre_gain(cur_events, cn_profile, return_selected
         if return_selected_option:
             return None, '0'
         return None
-    cur_pre_gain = random.choice(all_pre_gains)
+    cur_pre_gain = py_rng().choice(all_pre_gains)
 
     all_post_gains = [event for event in cur_events[1] if event[0] < event[1]]
     all_post_losses = [event for event in cur_events[1] if event[0] > event[1]]
@@ -1018,11 +1018,11 @@ def proposal_wgd_extend_shorten_pre_gain(cur_events, cn_profile, return_selected
         if return_selected_option:
             return None, '0'
         return None
-    selected_option = random.choice(available_options)
+    selected_option = py_rng().choice(available_options)
 
     ## OPTION A: extend pre-gain and flip a gain (turn to loss) that starts at doubled bp
     if selected_option == 'A':
-        cur_post_gain, pre_start_end = random.choice([(x, 'end') for x in all_post_gains_start_at_pre_end] + [(x, 'start') for x in all_post_gains_end_at_pre_start])
+        cur_post_gain, pre_start_end = py_rng().choice([(x, 'end') for x in all_post_gains_start_at_pre_end] + [(x, 'start') for x in all_post_gains_end_at_pre_start])
 
         event_proposal = _create_proposal_from_cur_events(
             cur_events, remove_pre=[cur_pre_gain],
@@ -1032,7 +1032,7 @@ def proposal_wgd_extend_shorten_pre_gain(cur_events, cn_profile, return_selected
 
     # OPTION B: shorten pre-gain and flip a loss (turn to gain) that ends at doubled bp but starts after pre-gain starts
     elif selected_option == 'B':
-        cur_post_loss, pre_start_end = random.choice([(x, 'start') for x in all_post_losses_end_at_pre_start_and_inside_pre] + [(x, 'end') for x in all_post_losses_start_at_pre_end_and_inside_pre])
+        cur_post_loss, pre_start_end = py_rng().choice([(x, 'start') for x in all_post_losses_end_at_pre_start_and_inside_pre] + [(x, 'end') for x in all_post_losses_start_at_pre_end_and_inside_pre])
         new_pre_gain = (cur_post_loss[0], cur_pre_gain[1]) if pre_start_end == 'start' else (cur_pre_gain[0], cur_post_loss[1])
 
         if not _removed_pre_gain_passes_loh_filter(cur_events, cur_pre_gain, cn_profile, which='shorten_pre_gain', new_pre_gain=new_pre_gain, total_cn=total_cn):
@@ -1049,15 +1049,15 @@ def proposal_wgd_extend_shorten_pre_gain(cur_events, cn_profile, return_selected
     elif selected_option == 'C':
         pre_start_end_prob = np.array([min(len(all_post_losses_end_at_pre_start), len(all_post_losses_left)), 
                                        min(len(all_post_losses_start_at_pre_end), len(all_post_losses_right))])
-        pre_start_end = np.random.choice(['start', 'end'], p=pre_start_end_prob/np.sum(pre_start_end_prob))
+        pre_start_end = np_rng().choice(['start', 'end'], p=pre_start_end_prob/np.sum(pre_start_end_prob))
 
         if pre_start_end == 'start':
-            cur_post_loss_left = random.choice(all_post_losses_left)
-            cur_post_loss_right = random.choice(all_post_losses_end_at_pre_start)
+            cur_post_loss_left = py_rng().choice(all_post_losses_left)
+            cur_post_loss_right = py_rng().choice(all_post_losses_end_at_pre_start)
             new_pre_gain = (cur_post_loss_left[0], cur_pre_gain[1])
         else:
-            cur_post_loss_left = random.choice(all_post_losses_start_at_pre_end)
-            cur_post_loss_right = random.choice(all_post_losses_right)
+            cur_post_loss_left = py_rng().choice(all_post_losses_start_at_pre_end)
+            cur_post_loss_right = py_rng().choice(all_post_losses_right)
             new_pre_gain = (cur_pre_gain[0], cur_post_loss_right[1])
 
         event_proposal = _create_proposal_from_cur_events(
@@ -1071,15 +1071,15 @@ def proposal_wgd_extend_shorten_pre_gain(cur_events, cn_profile, return_selected
 
         pre_start_end_prob = np.array([min(len(all_post_losses_end_at_pre_start), len(all_post_losses_left_partly_inside_pre)), 
                                        min(len(all_post_losses_start_at_pre_end), len(all_post_losses_right_partly_inside_pre))])
-        pre_start_end = np.random.choice(['start', 'end'], p=pre_start_end_prob/np.sum(pre_start_end_prob))
+        pre_start_end = np_rng().choice(['start', 'end'], p=pre_start_end_prob/np.sum(pre_start_end_prob))
 
         if pre_start_end == 'start':
-            cur_post_loss_left = random.choice(all_post_losses_left_partly_inside_pre)
-            cur_post_loss_right = random.choice(all_post_losses_end_at_pre_start)
+            cur_post_loss_left = py_rng().choice(all_post_losses_left_partly_inside_pre)
+            cur_post_loss_right = py_rng().choice(all_post_losses_end_at_pre_start)
             new_pre_gain = (cur_post_loss_left[0], cur_pre_gain[1])
         else:
-            cur_post_loss_left = random.choice(all_post_losses_start_at_pre_end)
-            cur_post_loss_right = random.choice(all_post_losses_right_partly_inside_pre)
+            cur_post_loss_left = py_rng().choice(all_post_losses_start_at_pre_end)
+            cur_post_loss_right = py_rng().choice(all_post_losses_right_partly_inside_pre)
             new_pre_gain = (cur_pre_gain[0], cur_post_loss_right[1])
 
         if not _removed_pre_gain_passes_loh_filter(cur_events, cur_pre_gain, cn_profile, which='shorten_pre_gain', new_pre_gain=new_pre_gain, total_cn=total_cn):
@@ -1097,10 +1097,10 @@ def proposal_wgd_extend_shorten_pre_gain(cur_events, cn_profile, return_selected
     elif selected_option == 'E':
 
         # Randomly select a group and sample two tuples from the selected group
-        selected_group, left_right = random.choice(
+        selected_group, left_right = py_rng().choice(
             [(x, 'left') for x in all_post_events_start_left_same_start.values()] +
             [(x, 'right') for x in all_post_events_end_right_same_end.values()])
-        cur_post_events = random.sample(selected_group, 2)
+        cur_post_events = py_rng().sample(selected_group, 2)
         assert ((left_right == "right" and cur_post_events[0][1] == cur_post_events[1][1]) or
                 (left_right == "left" and cur_post_events[0][0] == cur_post_events[1][0]))
 
@@ -1115,10 +1115,10 @@ def proposal_wgd_extend_shorten_pre_gain(cur_events, cn_profile, return_selected
     elif selected_option == 'F':
 
         # Randomly select a group and sample two tuples from the selected group
-        selected_group, left_right = random.choice(
+        selected_group, left_right = py_rng().choice(
             [(x, 'left') for x in all_post_events_end_left_and_inside_same_end.values()] +
             [(x, 'right') for x in all_post_events_start_right_and_inside_same_start.values()])
-        cur_post_losses = random.sample(selected_group, 2)
+        cur_post_losses = py_rng().sample(selected_group, 2)
         assert ((left_right == "right" and cur_post_losses[0][0] == cur_post_losses[1][0]) or
                 (left_right == "left" and cur_post_losses[0][1] == cur_post_losses[1][1]))
         new_pre_gain = (cur_post_losses[0][0], cur_pre_gain[1]) if left_right == 'right' else (cur_pre_gain[0], cur_post_losses[0][1])
@@ -1150,7 +1150,7 @@ def proposal_wgd_extend_shorten_pre_loss(cur_events, cn_profile, return_selected
         if return_selected_option:
             return None, '0'
         return None
-    cur_pre_loss = random.choice(all_pre_losses)
+    cur_pre_loss = py_rng().choice(all_pre_losses)
 
     all_post_gains = [event for event in cur_events[1] if event[0] < event[1]]
     all_post_losses = [event for event in cur_events[1] if event[0] > event[1]]
@@ -1193,11 +1193,11 @@ def proposal_wgd_extend_shorten_pre_loss(cur_events, cn_profile, return_selected
         if return_selected_option:
             return None, '0'
         return None
-    selected_option = random.choice(available_options)
+    selected_option = py_rng().choice(available_options)
 
     ## OPTION A: extend pre-loss and flip a loss (turn to gain) that starts at doubled bp
     if selected_option == 'A':
-        cur_post_loss, pre_start_end = random.choice([(x, 'end') for x in all_post_losses_start_at_pre_end] + [(x, 'start') for x in all_post_losses_end_at_pre_start])
+        cur_post_loss, pre_start_end = py_rng().choice([(x, 'end') for x in all_post_losses_start_at_pre_end] + [(x, 'start') for x in all_post_losses_end_at_pre_start])
         new_pre_loss = (cur_post_loss[0], cur_pre_loss[1]) if pre_start_end == 'start' else (cur_pre_loss[0], cur_post_loss[1])
         if not _added_pre_loss_passes_loh_filter(cur_events, cur_pre_loss, cn_profile, which='extend_pre_loss',
                                                  new_pre_loss=new_pre_loss, total_cn=total_cn):
@@ -1213,7 +1213,7 @@ def proposal_wgd_extend_shorten_pre_loss(cur_events, cn_profile, return_selected
 
     # OPTION B: shorten pre-loss and flip a gain (turn to loss) that ends at doubled bp but starts after pre-loss starts
     elif selected_option == 'B':
-        cur_post_gain, pre_start_end = random.choice([(x, 'start') for x in all_post_gains_end_at_pre_start_and_inside_pre] + [(x, 'end') for x in all_post_gains_start_at_pre_end_and_inside_pre])
+        cur_post_gain, pre_start_end = py_rng().choice([(x, 'start') for x in all_post_gains_end_at_pre_start_and_inside_pre] + [(x, 'end') for x in all_post_gains_start_at_pre_end_and_inside_pre])
         new_pre_loss = (cur_post_gain[0], cur_pre_loss[1]) if pre_start_end == 'start' else (cur_pre_loss[0], cur_post_gain[1])
 
         event_proposal = _create_proposal_from_cur_events(
@@ -1225,15 +1225,15 @@ def proposal_wgd_extend_shorten_pre_loss(cur_events, cn_profile, return_selected
     elif selected_option == 'C':
         pre_start_end_prob = np.array([min(len(all_post_gains_end_at_pre_start), len(all_post_gains_right)), 
                                        min(len(all_post_gains_start_at_pre_end), len(all_post_gains_left))])
-        pre_start_end = np.random.choice(['pre-start', 'pre-end'], p=pre_start_end_prob/np.sum(pre_start_end_prob))
+        pre_start_end = np_rng().choice(['pre-start', 'pre-end'], p=pre_start_end_prob/np.sum(pre_start_end_prob))
 
         if pre_start_end == 'pre-start':
-            cur_post_gain_left = random.choice(all_post_gains_end_at_pre_start)
-            cur_post_gain_right = random.choice(all_post_gains_right)
+            cur_post_gain_left = py_rng().choice(all_post_gains_end_at_pre_start)
+            cur_post_gain_right = py_rng().choice(all_post_gains_right)
             new_pre_loss = (cur_post_gain_right[0], cur_pre_loss[1])
         else:
-            cur_post_gain_left = random.choice(all_post_gains_left)
-            cur_post_gain_right = random.choice(all_post_gains_start_at_pre_end)
+            cur_post_gain_left = py_rng().choice(all_post_gains_left)
+            cur_post_gain_right = py_rng().choice(all_post_gains_start_at_pre_end)
             new_pre_loss = (cur_pre_loss[0], cur_post_gain_left[1])
 
         if not _added_pre_loss_passes_loh_filter(cur_events, cur_pre_loss, cn_profile, which='extend_pre_loss',
@@ -1252,15 +1252,15 @@ def proposal_wgd_extend_shorten_pre_loss(cur_events, cn_profile, return_selected
     elif selected_option == 'D':
         pre_start_end_prob = np.array([min(len(all_post_gains_end_at_pre_start), len(all_post_gains_right_partly_inside_pre)), 
                                        min(len(all_post_gains_start_at_pre_end), len(all_post_gains_left_partly_inside_pre))])
-        pre_start_end = np.random.choice(['pre-start', 'pre-end'], p=pre_start_end_prob/np.sum(pre_start_end_prob))
+        pre_start_end = np_rng().choice(['pre-start', 'pre-end'], p=pre_start_end_prob/np.sum(pre_start_end_prob))
 
         if pre_start_end == 'pre-start':
-            cur_post_gain_left = random.choice(all_post_gains_end_at_pre_start)
-            cur_post_gain_right = random.choice(all_post_gains_right_partly_inside_pre)
+            cur_post_gain_left = py_rng().choice(all_post_gains_end_at_pre_start)
+            cur_post_gain_right = py_rng().choice(all_post_gains_right_partly_inside_pre)
             new_pre_loss = (cur_post_gain_right[0], cur_pre_loss[1])
         else:
-            cur_post_gain_left = random.choice(all_post_gains_left_partly_inside_pre)
-            cur_post_gain_right = random.choice(all_post_gains_start_at_pre_end)
+            cur_post_gain_left = py_rng().choice(all_post_gains_left_partly_inside_pre)
+            cur_post_gain_right = py_rng().choice(all_post_gains_start_at_pre_end)
             new_pre_loss = (cur_pre_loss[0], cur_post_gain_left[1])
 
         event_proposal = _create_proposal_from_cur_events(
@@ -1272,10 +1272,10 @@ def proposal_wgd_extend_shorten_pre_loss(cur_events, cn_profile, return_selected
     # OPTION E: extend pre-loss and change two events with the same start to the left/right from right/left side (losses will turn to gains)
     elif selected_option == 'E':
         # Randomly select a group and sample two tuples from the selected group
-        selected_group, left_right = random.choice(
+        selected_group, left_right = py_rng().choice(
             [(x, 'left') for x in all_post_events_end_left_same_end.values()] +
             [(x, 'right') for x in all_post_events_start_right_same_start.values()])
-        cur_post_events = random.sample(selected_group, 2)
+        cur_post_events = py_rng().sample(selected_group, 2)
         assert ((left_right == "right" and cur_post_events[0][0] == cur_post_events[1][0]) or
                 (left_right == "left" and cur_post_events[0][1] == cur_post_events[1][1]))
         new_pre_loss = (cur_post_events[0][0], cur_pre_loss[1]) if left_right == 'right' else (cur_pre_loss[0], cur_post_events[0][1])
@@ -1295,10 +1295,10 @@ def proposal_wgd_extend_shorten_pre_loss(cur_events, cn_profile, return_selected
     # OPTION F: shorten pre-loss and shorten two gains with the same end to the right from left side (opposite of E)
     elif selected_option == 'F':
         # Randomly select a group and sample two tuples from the selected group
-        selected_group, left_right = random.choice(
+        selected_group, left_right = py_rng().choice(
             [(x, 'left') for x in all_post_events_start_left_and_inside_same_start.values()] +
             [(x, 'right') for x in all_post_events_end_right_and_inside_same_end.values()])
-        cur_post_gains = random.sample(selected_group, 2)
+        cur_post_gains = py_rng().sample(selected_group, 2)
         assert ((left_right == "right" and cur_post_gains[0][1] == cur_post_gains[1][1]) or
                 (left_right == "left" and cur_post_gains[0][0] == cur_post_gains[1][0]))
 
@@ -1335,7 +1335,7 @@ def proposal_wgd_switch_loh_loss(cur_events, cn_profile, return_pre_post=False):
             return None, '0'
         else:
             return None
-    cur_loh_loss, pre_post = random.choice(all_loh_losses)
+    cur_loh_loss, pre_post = py_rng().choice(all_loh_losses)
 
     event_proposal = _create_proposal_from_cur_events(
         cur_events,
