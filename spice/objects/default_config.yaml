@@ -31,6 +31,19 @@ params:
   mcmc_max_T: -6
   mcmc_min_T: 1
   mcmc_n_iterations_scale: 200
+  # Runaway ceilings for the large_chroms MCMC. Both default to None (off) = historical behaviour;
+  # when either fires the unit raises McmcGuardExceeded, which _run_batch records in
+  # failed_reports.tsv, so one pathological unit costs one unit instead of the whole chunk.
+  # mcmc_max_iterations: refuse a unit whose derived budget (n_events * mcmc_n_iterations_scale)
+  #   exceeds this. Guards hyper-fragmented chromosomes buying an enormous budget.
+  # mcmc_loh_solve_time_limit: seconds per CP-SAT solve in the proposal-time LOH filters, which are
+  #   otherwise UNBOUNDED (every sibling call site uses 1s). This is the ceiling that catches a
+  #   trajectory wedged inside ONE solve -- how CNSistent chunk_0024 reached ~73 GB and SIGSEGV'd
+  #   without finishing a single iteration. NB setting it makes results wall-clock dependent (see the
+  #   time_limit_* caveat above), but a hit is REPORTED rather than silently answered, so a run either
+  #   reproduces or tells you which unit it gave up on.
+  mcmc_max_iterations: None
+  mcmc_loh_solve_time_limit: None
   # Time limits (in seconds, per chromosome)
   time_limit_all_solutions: None
   time_limit_mcmc: None

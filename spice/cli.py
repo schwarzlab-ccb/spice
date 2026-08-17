@@ -364,6 +364,10 @@ def main_event_inference(args):
                     skip_loh_check=skip_loh_check,
                     min_T=config['params']['mcmc_min_T'],
                     max_T=config['params']['mcmc_max_T'],
+                    # Runaway ceilings; None (default) = off. A hit raises McmcGuardExceeded, which
+                    # _run_batch turns into one row in failed_reports.tsv instead of a dead chunk.
+                    max_iterations=config['params'].get('mcmc_max_iterations', None),
+                    loh_solve_time_limit=config['params'].get('mcmc_loh_solve_time_limit', None),
                 )
 
             results = _run_batch(cur_ids, args.cores, f'Large chromosomes ({wgd_status})', run_mcmc, logger)
@@ -491,7 +495,6 @@ def main_plotting(args):
         fig.savefig(out_path, bbox_inches='tight')
         logger.info(f'Saved plot to {out_path}')
     elif args.plot_single_locus is not None:
-        from spice.utils import open_pickle
         from spice.tsg_og.detection import convolution_simulation_per_ls
         
         detection_assignment = args.loci_mode

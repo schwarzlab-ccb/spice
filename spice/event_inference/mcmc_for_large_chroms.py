@@ -33,6 +33,34 @@ Mcmc_result_full = namedtuple('Mcmc_result',
                          ['cur_id', 'best_score', 'scores', 'sv_overlaps', 'loh_filter_passed', 'best_events', 'best_diffs', 'best_sv_overlaps', 'is_accepted_iteration', 'scores_full', 'sv_overlaps_full', 'sv_selected_events', 'all_events', 'all_diffs'])
 
 
+# --- runaway guard for the LOH filters used during proposal construction -------------------------
+#
+# `_added_pre_loss_passes_loh_filter` and `_removed_pre_gain_passes_loh_filter` call CP-SAT with NO
+# time limit, unlike every sibling call site (which passes single_time_limit=1). They are reached from
+# 10 places across 6 proposal_* functions, so the limit is process-level state -- set once per unit by
+# solve_with_mcmc_wrapper -- rather than an 11th argument threaded through all of them.
+#
+# Why a guard is needed at all: one MCMC trajectory can wedge inside a single one of those solves and
+# grow without bound. CNSistent chunk_0024, unit SP124441:chr9:cn_a, reached ~73 GB and SIGSEGV'd
+# there -- never completing iteration 0, which is why an iteration ceiling cannot catch it. A native
+# crash or an OOM kill cannot be caught per-unit, so it destroys the whole chunk; a raised exception
+# costs exactly one unit (see McmcGuardExceeded).
+#
+# None = unbounded, i.e. the historical behaviour, so nothing changes unless a run opts in.
+_loh_solve_time_limit = None
+
+
+def set_loh_solve_time_limit(seconds):
+    """Set (or clear, with None) the per-solve CP-SAT guard for the proposal-time LOH filters."""
+    global _loh_solve_time_limit
+    _loh_solve_time_limit = None if seconds is None else float(seconds)
+    return _loh_solve_time_limit
+
+
+def get_loh_solve_time_limit():
+    return _loh_solve_time_limit
+
+
 @CALC_NEW()
 def mcmc_event_selection(
         cur_id,
@@ -706,7 +734,8 @@ def _removed_pre_gain_passes_loh_filter(cur_events, cur_pre_gain, cn_profile, wh
     if np.any(cur_diff_pre == -1):
         cur_diff_pre_loh_filtered = loh_filters_for_graph_result_diffs(
             [cur_diff_pre], cn_profile[start:end], total_cn=total_cn,
-            single_time_limit=None, return_all_solutions=False, shuffle_diffs=False)
+            single_time_limit=_loh_solve_time_limit, return_all_solutions=False, shuffle_diffs=False,
+            raise_on_time_limit=_loh_solve_time_limit is not None)
         if len(cur_diff_pre_loh_filtered) == 0:
             return False
     
@@ -744,7 +773,8 @@ def _added_pre_loss_passes_loh_filter(cur_events, cur_loss, cn_profile, which, n
 
     cur_diff_pre_loh_filtered = loh_filters_for_graph_result_diffs(
         [cur_diff_pre], cn_profile[start:end], total_cn=total_cn,
-        single_time_limit=None, return_all_solutions=False, shuffle_diffs=False)
+        single_time_limit=_loh_solve_time_limit, return_all_solutions=False, shuffle_diffs=False,
+        raise_on_time_limit=_loh_solve_time_limit is not None)
     if len(cur_diff_pre_loh_filtered) == 0:
         return False
     

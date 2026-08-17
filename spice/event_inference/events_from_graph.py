@@ -15,7 +15,7 @@ from spice.logging import get_logger, log_debug
 from spice.random_state import np_rng
 from spice.event_inference.fst_assets import get_diploid_fsa, T_forced_WGD
 from spice.event_inference.fsts import fsa_from_string
-from spice.event_inference.data_structures import Diff, FullPaths
+from spice.event_inference.data_structures import Diff, FullPaths, McmcGuardExceeded
 
 sv_matching_threshold = config['params']['sv_matching_threshold']
 diploid_fsa = get_diploid_fsa(total_copy_numbers=False)
@@ -616,7 +616,15 @@ class CpSolverSolutionArray(cp_model.CpSolverSolutionCallback):
 
 
 def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, total_cn=False,
-                                       return_all_solutions=True, shuffle_diffs=True):
+                                       return_all_solutions=True, shuffle_diffs=True,
+                                       raise_on_time_limit=False):
+    """`raise_on_time_limit`: treat a CP-SAT timeout as a reported failure, not as "no solution".
+
+    Without it, a solve that hits `single_time_limit` returns UNKNOWN with an empty solution array,
+    which is indistinguishable here from a genuine "no LOH solution exists" and silently flips the
+    caller's filter decision. Callers that bound the solve as a RUNAWAY GUARD (rather than as a
+    deliberate best-effort budget) pass True so the unit is reported instead of answered wrongly.
+    """
 
     if len(diffs) == 0:
         logger.warning('Empty diffs passed into loh_filters_for_graph_result_diffs. Returning empty list.')
@@ -747,6 +755,23 @@ def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, t
             solver.parameters.enumerate_all_solutions = False
             solver.solution_limit = 1
         status = solver.Solve(model, solver_solutions)
+
+        # A timeout returns UNKNOWN (nothing proven) with no solutions, which the check below cannot
+        # tell apart from "no LOH solution exists" -- so when the limit is a runaway guard, report the
+        # unit rather than let a flipped filter decision through as if it were a real answer.
+        if raise_on_time_limit and status == cp_model.UNKNOWN:
+            # `n` is the count of boolean enforcement vars built into this model (it starts as the
+            # diff index at the top of the loop, then is reset to 0 and incremented per NewBoolVar --
+            # which is also why the debug line below reads oddly). Reporting it is the useful part:
+            # a model this size over a profile this short is the pathology, since the constraint set
+            # is combinatorial in the gain/loss pairing rather than in the profile length.
+            raise McmcGuardExceeded(
+                f'LOH CP-SAT solve exceeded its {single_time_limit}s guard (status UNKNOWN): '
+                f'~{n} boolean enforcement vars over a {len(profile)}-segment profile, and the solver '
+                f'proved nothing within the budget -- so its empty result must NOT be read as "no LOH '
+                f'solution". Raising so the unit lands in failed_reports.tsv instead of taking the '
+                f'process down (unbounded, this solve reached ~73 GB and SIGSEGV\'d) or silently '
+                f'flipping the filter decision.')
 
         if len(solver_solutions.all_solutions) == 0:
             logger.debug(f'no loh solution found for solution {n}')
