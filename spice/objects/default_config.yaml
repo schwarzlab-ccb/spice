@@ -42,11 +42,11 @@ params:
   #   without finishing a single iteration. NB setting it makes results wall-clock dependent (see the
   #   time_limit_* caveat above), but a hit is REPORTED rather than silently answered, so a run either
   #   reproduces or tells you which unit it gave up on.
-  mcmc_max_iterations: None
-  mcmc_loh_solve_time_limit: None
+  mcmc_max_iterations: null
+  mcmc_loh_solve_time_limit: null
   # Time limits (in seconds, per chromosome)
-  time_limit_all_solutions: None
-  time_limit_mcmc: None
+  time_limit_all_solutions: null
+  time_limit_mcmc: null
   skip_loh_check_for_large_chroms: True # Whether to skip LOH checks for large chromosomes when MCMC solving times out (can lead to inaccurate results, but might be necessary for large chromosomes)
   # Cluster parameters for Snakemake
   knn_mem: 16000
