@@ -1,6 +1,7 @@
 import os
 from collections import namedtuple
 from copy import copy, deepcopy
+from functools import lru_cache
 import pickle
 from joblib import Parallel, delayed
 
@@ -367,6 +368,21 @@ def create_height_multiplier(cur_widths, cur_chrom, cur_length_scale, cur_type, 
     return height_multiplier
 
 
+@lru_cache(maxsize=None)
+def _telomere_bounds(cur_chrom, cur_length_scale):
+    """Observed (chrom_start, chrom_end) for one (chromosome, length scale).
+
+    Memoised because it is a per-key constant that sits on the hottest path in the codebase:
+    convolution_simulation runs once per MCMC iteration, so the resim null evaluates it millions
+    of times per chromosome. The pandas MultiIndex .loc lookup costs ~92 us -- more than the
+    np.convolve it precedes on the mid and large length scales -- and the caller used to do it
+    twice, once per bound. Caching returns the identical values, so results are bit-identical;
+    it is only valid because TELOMERES_OBSERVED is loaded once at import and never mutated.
+    """
+    row = TELOMERES_OBSERVED.loc[cur_chrom, cur_length_scale]
+    return row['chrom_start'], row['chrom_end']
+
+
 def convolution_simulation(cur_widths, selection_points=None, chrom_size=None, cur_type=None, cur_chrom=None,
                         kernel=None, kernel_edge=None, baseline_fitness=1, legacy_height_multiplier=False,
                         height_multiplier=None, segment_size=100e3, return_None_if_zero=False,
@@ -384,8 +400,7 @@ def convolution_simulation(cur_widths, selection_points=None, chrom_size=None, c
             chrom_start = 0
             chrom_end = CHROM_LENS[cur_chrom]
         else:
-            chrom_start = TELOMERES_OBSERVED.loc[cur_chrom, cur_length_scale]['chrom_start']
-            chrom_end = TELOMERES_OBSERVED.loc[cur_chrom, cur_length_scale]['chrom_end']
+            chrom_start, chrom_end = _telomere_bounds(cur_chrom, cur_length_scale)
     chrom_left_pad = int(chrom_start//segment_size)
     chrom_right_pad = int((chrom_size - chrom_end)//segment_size)
 

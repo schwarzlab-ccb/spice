@@ -30,9 +30,29 @@ PLATEAU_WIDTH = 10e5
 CHROM_LENS = data_loaders.load_chrom_lengths()
 
 
+def _prepare_mse_terms(data_per_length_scale):
+    """The loop-invariant half of calc_mse_loss, per length scale.
+
+    _optimize_selection_points mutates only the generated signals, so the centromere mask, the
+    masked observed signal and the normaliser are constant for a whole optimisation. Hoisting
+    them out of its iteration loop avoids re-doing the fancy-index copy of data['signals'] for
+    all eight length scales on every single iteration.
+    """
+    return [(data['non_centromere_index'],
+             data['signals'][data['non_centromere_index']],
+             data['cur_loss_norm'])
+            for data in data_per_length_scale.values()]
+
+
+def calc_mse_loss_prepared(mse_terms, cur_conv_simulated):
+    """calc_mse_loss evaluated against terms from _prepare_mse_terms. Same value, same order."""
+    return sum([np.mean((sig_masked - generated_signal[non_centromere_index]) ** 2) / cur_loss_norm
+                for (non_centromere_index, sig_masked, cur_loss_norm), generated_signal
+                in zip(mse_terms, cur_conv_simulated)])
+
+
 def calc_mse_loss(data_per_length_scale, cur_conv_simulated):
-    return sum([np.mean((data['signals'][data['non_centromere_index']] - generated_signal[data['non_centromere_index']]) ** 2) / data['cur_loss_norm']
-                for data, generated_signal in zip(data_per_length_scale.values(), cur_conv_simulated)])
+    return calc_mse_loss_prepared(_prepare_mse_terms(data_per_length_scale), cur_conv_simulated)
 
 
 def calc_within_ci_bootstrap(data_per_length_scale, simulated_conv, exclude_zero_signal=False):
@@ -240,6 +260,10 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
     assert len(loci_to_optimize) > 0, 'No loci to optimize'
     assert N_iterations == 0 or N_iterations >= N_iterations_base, f'N_iterations ({N_iterations}) should be greater than N_iterations_base ({N_iterations_base})'
 
+    # data_per_length_scale is read-only for the rest of this function, so the loss's observed-signal
+    # side is constant across all N_iterations -- extract it once (see _prepare_mse_terms).
+    mse_terms = _prepare_mse_terms(data_per_length_scale)
+
     for iteration in range(N_iterations):
         # Choose a cluster index to modify (the first N_iteration_base ones only optimize last one)
         cur_cluster_i = (len(best_selection_points_per_cluster) - 1 if (iteration < N_iterations_base and not final_iteration)
@@ -329,7 +353,7 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
                 height_multiplier=data.get('height_multiplier', None)
                 )
         
-        cur_loss = calc_mse_loss(data_per_length_scale, generated_signals)
+        cur_loss = calc_mse_loss_prepared(mse_terms, generated_signals)
 
         if calc_acceptance(cur_loss, best_loss, iteration,
                            N_iterations_base if (iteration < N_iterations_base and not final_iteration) else N_iterations - N_iterations_base,
