@@ -56,8 +56,10 @@ class CALC_NEW:
         self.filename = filename
         self.force_new = force_new
         self.logger = get_logger('CALC_NEW')
-        if not verbose:
-            self.logger.setLevel(logging.WARNING)
+        # log_debug() emits only when the level is exactly DEBUG, so verbose must set DEBUG rather
+        # than leave get_logger's INFO in place -- otherwise verbose=True produced no debug output
+        # at all. Mirrors the calc_new_verbose branch in __call__ below.
+        self.logger.setLevel(logging.DEBUG if verbose else logging.WARNING)
 
 
     def __call__(self, func):

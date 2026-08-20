@@ -1,3 +1,4 @@
+import itertools
 import os
 from functools import reduce
 
@@ -166,8 +167,24 @@ def overlap_with_gistic_biscut(loci_df, gistic_loci, biscut_loci):
 
 
 def calculate_events_per_loci_df(loci_df, all_selection_points=None, final_events_df=None, rates_and_events_per_loci=None):
+    """Add `added_events` and its per-(length scale, direction) decomposition.
+
+    `total_events_per_loci` is keyed by `(length_scale, direction)` -- the same eight combinations as
+    the `fitness_<ls>_<dir>` columns -- and `added_events` is their sum. Keeping the parts as
+    `added_events_<ls>_<dir>` lets a consumer weight the length scales itself (an added-events score
+    that drops the small scale, say) instead of only seeing the total. Without them that
+    decomposition has to be rebuilt outside the pipeline, which is how the old
+    `added_events_without_small` column came to exist and then be lost.
+
+    The total is unchanged: it is still the sum over all eight keys.
+    """
+    part_cols = [f'added_events_{ls}_{direction}'
+                 for ls, direction in itertools.product(LENGTH_SCALE_NAMES, ['gain', 'loss'])]
 
     loci_df['added_events'] = 0.
+    # Initialised up front so the schema is the same whether or not a chromosome contributes.
+    for col in part_cols:
+        loci_df[col] = 0.
     for cur_chrom in CHROMS[:-1]:
         if rates_and_events_per_loci is not None:
             total_events_per_loci = rates_and_events_per_loci[cur_chrom][1]
@@ -186,6 +203,11 @@ def calculate_events_per_loci_df(loci_df, all_selection_points=None, final_event
         cur_added_events = np.sum(np.stack(cur_added_events), axis=0)
         cur_index = loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom').index
         loci_df.loc[cur_index, 'added_events'] = cur_added_events
+        # Same alignment as the total above (loci ordered by rank_on_chrom, trailing element dropped).
+        # A key whose event rate was zero is an int rather than an array, and its column stays 0.
+        for (ls, direction), value in total_events_per_loci.items():
+            if not isinstance(value, int):
+                loci_df.loc[cur_index, f'added_events_{ls}_{direction}'] = value[:-1]
 
     return loci_df
 
