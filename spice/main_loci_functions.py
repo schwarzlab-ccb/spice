@@ -557,6 +557,7 @@ def combine_loci(
     p_value_threshold: float = 0.05,
     p_values_mode: str = 'random',
     p_values_optimize_ls_separately: bool = False,
+    p_values_within_ci_filtering: bool = False,
     p_value_cores: int = 1,
     overwrite: bool = False,
     mode: str = 'detection',
@@ -642,7 +643,7 @@ def combine_loci(
             loci_df, N_random=p_values_N_random, n_iterations_optim=p_values_N_iterations,
             output_dir=loci_results_dir, data_per_length_scale=all_data_per_length_scale,
             overwrite=False, mode=p_values_mode, optimize_ls_separately=p_values_optimize_ls_separately,
-            n_jobs=p_value_cores)
+            within_ci_filtering=p_values_within_ci_filtering, n_jobs=p_value_cores)
         # assign_p_values: p_value_raw = raw p, p_value = BH-FDR q. Remap to canonical raw p / FDR q.
         final_loci_df['q_value'] = final_loci_df['p_value']
         final_loci_df['p_value'] = final_loci_df.pop('p_value_raw')
@@ -1005,6 +1006,7 @@ def loci_assignment(
     p_values_N_iterations: int = 1_000,
     p_values_mode: str = 'random',
     p_values_optimize_ls_separately: bool = False,
+    p_values_within_ci_filtering: bool = False,
     p_value_threshold: float = 0.05,
     overwrite: bool = False,
     overwrite_preprocessing: bool = False,
@@ -1125,6 +1127,7 @@ def loci_assignment(
         p_values_N_iterations=p_values_N_iterations,
         p_values_mode=p_values_mode,
         p_values_optimize_ls_separately=p_values_optimize_ls_separately,
+        p_values_within_ci_filtering=p_values_within_ci_filtering,
         p_value_threshold=p_value_threshold,
         calculate_p_value=calculate_p_value,
         overwrite=overwrite,

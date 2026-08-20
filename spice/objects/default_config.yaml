@@ -90,6 +90,7 @@ loci_detection:
   p_value_threshold: 0.05 # Loci with q_value (BH-FDR fitness p) >= this are dropped from the output
   p_values_mode: 'top' # How resimulation loci are chosen for p-value calculation ('random' or 'top')
   p_values_optimize_ls_separately: False # Only used when p_values_mode='top'. If True, each length scale gets its own top-residual position and is optimized separately, instead of jointly optimizing one shared position
+  p_values_within_ci_filtering: False # If True, ablate each resim locus like detection's within_ci_filtering ablates the observed loci (zeroing a length scale the signal does not need), so the null's fitness is measured the same way the observed fitness is
   # Event preprocessing parameters
   remove_plateaus: True # Remove events overlapping copy-number plateaus
   remove_chrY: True # Remove chrY events from analysis

@@ -58,6 +58,11 @@ def p_value_using_resim(
             length scales gets its own top-residual position and is optimized on its own (via
             `ls_to_optimize`), instead of jointly optimizing a single shared position across all
             length scales. `fitness_stat` is then the mean of the four resulting `fit_<ls>` values.
+        within_ci_filtering: run the resim locus through `p_values_within_ci_filter` (SPICE's
+            `within_ci_fitness_filter` on the resimulated signal) before reading its fitness, so a
+            length scale the resim does not need is zeroed -- the same ablation the observed loci go
+            through in the `within_ci_filtering` / `final_within_ci_filtering` detection steps.
+            Without it the null is a free single-locus fit and the comparison is conservative.
         n_jobs: parallelise the (independent) resims across this many joblib workers (each worker
             runs its resims sequentially, single-core). n_jobs<=1 -> original sequential path.
     """
@@ -365,20 +370,26 @@ def _observed_fitness_per_ls(cur_loci):
 
 def resim_null_for_chrom_type(cur_chrom, cur_type, data_per_length_scale, output_dir,
                               N_random, n_iterations_optim, mode='random', optimize_ls_separately=False,
-                              overwrite=False, n_jobs=1):
+                              within_ci_filtering=False, overwrite=False, n_jobs=1):
     """Load-or-compute (and cache) the resimulation null for one (chrom, type). The cache key is
     shared by every fitness p-value consumer -- assign_p_values (below) and the per-chromosome
     scatter that warms it -- so warming the caches in parallel lets the combine's assign_p_values
     reuse the nulls without re-simulating. `data_per_length_scale` is one chromosome's dict.
 
+    `within_ci_filtering` ablates each resim locus the way `within_ci_filtering` ablates the OBSERVED
+    loci during detection (zeroing a length scale the resim signal does not need), so the null
+    statistic is measured like the observed one instead of being a free, unshrunk fit.
+
     The base seed is part of the cache key: the null is a function of it, so re-running under a new
     seed to get an independent replicate has to resimulate rather than silently reload the old
-    null."""
+    null. So are `mode`, `optimize_ls_separately` and `within_ci_filtering` -- each defines a
+    different null, and a shared filename would silently serve one for another."""
     from spice.tsg_og.p_values import p_value_using_resim
     cache = os.path.join(
         output_dir, 'p_values',
         f'{cur_chrom}_{cur_type}_N_random_{N_random}_N_optim_{n_iterations_optim}_mode_{mode}'
-        f'_ls_separately_{optimize_ls_separately}_seed_{get_seed()}.pickle')
+        f'_ls_separately_{optimize_ls_separately}_ci_filter_{within_ci_filtering}'
+        f'_seed_{get_seed()}.pickle')
     if not overwrite and os.path.exists(cache):
         logger.info(f"Loading p-values for {cur_chrom} ({cur_type}) from cache")
         return open_pickle(cache)
@@ -386,7 +397,8 @@ def resim_null_for_chrom_type(cur_chrom, cur_type, data_per_length_scale, output
     results = p_value_using_resim(
         cur_chrom=cur_chrom, cur_up_down='up' if cur_type == 'OG' else 'down', N_test=N_random,
         data_per_length_scale=data_per_length_scale, n_iterations_optim=n_iterations_optim,
-        mode=mode, optimize_ls_separately=optimize_ls_separately, n_jobs=n_jobs)
+        mode=mode, optimize_ls_separately=optimize_ls_separately,
+        within_ci_filtering=within_ci_filtering, n_jobs=n_jobs)
     os.makedirs(os.path.dirname(cache), exist_ok=True)
     save_pickle(results, cache)
     return results

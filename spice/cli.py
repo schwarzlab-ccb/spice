@@ -645,10 +645,14 @@ def main_loci_detection(args):
     p_values_N_iterations = loci_params['p_values_N_iterations']
     p_value_mode = loci_params['p_values_mode']
     p_values_optimize_ls_separately = loci_params.get('p_values_optimize_ls_separately', False)
+    # Ablate each resim locus like detection's within_ci_filtering ablates the observed loci, so the
+    # null's fitness is measured the same way the table's is (see resim_null_for_chrom_type).
+    p_values_within_ci_filtering = loci_params.get('p_values_within_ci_filtering', False)
     p_thresh = loci_params['p_value_threshold'] # loci with q_value >= this are dropped
     if calc_p:
         logger.info(f'Fitness p-value (resim null): mode={p_value_mode}, N_iterations_optim={p_values_N_iterations}, '
-                    f'N_random={p_values_N_random}, optimize_ls_separately={p_values_optimize_ls_separately}; '
+                    f'N_random={p_values_N_random}, optimize_ls_separately={p_values_optimize_ls_separately}, '
+                    f'within_ci_filtering={p_values_within_ci_filtering}; '
                     f'keeping loci with q_value < {p_thresh}')
     else:
         logger.info('Fitness p-value resim disabled (calculate_p_value=false)')
@@ -696,6 +700,7 @@ def main_loci_detection(args):
                 resim_null_for_chrom_type(chrom, cur_type, dpls, loci_results_dir,
                                           p_values_N_random, p_values_N_iterations, mode=p_value_mode,
                                           optimize_ls_separately=p_values_optimize_ls_separately,
+                                          within_ci_filtering=p_values_within_ci_filtering,
                                           overwrite=args.overwrite, n_jobs=args.cores)
             logger.info(f'  warmed fitness p-value resim cache for {chrom}')
 
@@ -720,6 +725,7 @@ def main_loci_detection(args):
         p_value_threshold=loci_params['p_value_threshold'],
         p_values_mode=loci_params['p_values_mode'],
         p_values_optimize_ls_separately=p_values_optimize_ls_separately,
+        p_values_within_ci_filtering=p_values_within_ci_filtering,
         p_value_cores=args.cores,
         overwrite=args.overwrite,
         mode='detection'
@@ -798,6 +804,7 @@ def main_loci_assignment(args):
         p_values_N_iterations=loci_params['p_values_N_iterations'],
         p_values_mode=loci_params['p_values_mode'],
         p_values_optimize_ls_separately=loci_params.get('p_values_optimize_ls_separately', False),
+        p_values_within_ci_filtering=loci_params.get('p_values_within_ci_filtering', False),
         p_value_threshold=loci_params['p_value_threshold'],
         overwrite=args.overwrite,
         overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),

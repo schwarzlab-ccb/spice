@@ -492,6 +492,7 @@ def assign_p_values(
     overwrite=False,
     mode='random',
     optimize_ls_separately=False,
+    within_ci_filtering=False,
     n_jobs=1,
 ):
     """Assign the FITNESS p-value to loci, loading the resim null from cache or computing it.
@@ -511,13 +512,16 @@ def assign_p_values(
         mode: Resimulation-locus selection mode passed to p_value_using_resim ('random' or 'top')
         optimize_ls_separately: Passed to p_value_using_resim; only used when mode='top'. See its
             docstring for details.
+        within_ci_filtering: Passed to p_value_using_resim -- ablate each resim locus the way
+            detection's within_ci_filtering ablates the observed loci, so the null statistic is
+            measured like the observed one. Part of the null cache key.
         n_jobs: joblib workers for any resim that isn't already cached (default 1)
     """
     from spice.tsg_og.p_values import (
         get_actual_p_values_from_results, get_actual_p_values_per_ls_from_results)
 
 
-    log_debug(logger, f'Assigning fitness p-values to loci for {len(data_per_length_scale)} chromosomes with N_random={N_random}, n_iterations_optim={n_iterations_optim}, mode={mode}, optimize_ls_separately={optimize_ls_separately}, overwrite={overwrite}')
+    log_debug(logger, f'Assigning fitness p-values to loci for {len(data_per_length_scale)} chromosomes with N_random={N_random}, n_iterations_optim={n_iterations_optim}, mode={mode}, optimize_ls_separately={optimize_ls_separately}, within_ci_filtering={within_ci_filtering}, overwrite={overwrite}')
 
     loci_df['p_value_raw'] = 1
     for ls in LENGTH_SCALE_NAMES:
@@ -534,7 +538,7 @@ def assign_p_values(
             p_value_results = resim_null_for_chrom_type(
                 cur_chrom, cur_type, data_per_length_scale[cur_chrom], output_dir,
                 N_random, n_iterations_optim, mode=mode, optimize_ls_separately=optimize_ls_separately,
-                overwrite=overwrite, n_jobs=n_jobs)
+                within_ci_filtering=within_ci_filtering, overwrite=overwrite, n_jobs=n_jobs)
 
             # Apply p-values to loci dataframe
             p_values = get_actual_p_values_from_results(cur_loci, p_value_results, N_random)
