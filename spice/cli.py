@@ -669,6 +669,7 @@ def main_loci_detection(args):
             overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
             name=config['name'],
             N_loci=loci_params['N_loci'],
+            N_loci_spacing=loci_params.get('N_loci_spacing'),   # overrides N_loci per chromosome
             loci_results_dir=loci_results_dir,
             skip_up_down=loci_params['skip_up_down'],
             N_bootstrap=loci_params['N_bootstrap'],

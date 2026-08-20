@@ -369,6 +369,48 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
     return best_selection_points_per_cluster, best_loss, all_losses
 
 
+def blocked_region_bins(cur_chrom, segment_size_dict=DEFAULT_SEGMENT_SIZE_DICT,
+                        blocked_distance_th=2e5):
+    """The small-scale bin indices detection refuses to place a locus in: the padded telomere bounds
+    and the padded centromere. Padding is `max(blocked_distance_th, segment_size_dict['large'])` on
+    each edge, i.e. one large-scale segment when that is the wider of the two.
+
+    Returns (telomere_block_start, telomere_block_end, centromere_block_start, centromere_block_end)
+    -- the residual search zeroes everything before/after the telomere pair and everything between
+    the centromere pair. Shared with `n_loci_from_spacing` so the seeding budget is derived from
+    exactly the region the search may use.
+    """
+    tel_cen_distance_th = max(blocked_distance_th, segment_size_dict['large'])
+    small = segment_size_dict['small']
+    return (
+        int((TELOMERES_OBSERVED.loc[cur_chrom, 'small']['chrom_start'] + tel_cen_distance_th) / small),
+        int((TELOMERES_OBSERVED.loc[cur_chrom, 'small']['chrom_end'] - tel_cen_distance_th) / small),
+        int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_start'] - tel_cen_distance_th) / small),
+        int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end'] + tel_cen_distance_th) / small),
+    )
+
+
+def n_loci_from_spacing(cur_chrom, spacing, segment_size_dict=DEFAULT_SEGMENT_SIZE_DICT,
+                        blocked_distance_th=2e5):
+    """How many loci to seed on `cur_chrom` at one locus per `spacing` bp of SEARCHABLE sequence.
+
+    Searchable = the padded telomere-to-telomere span minus the padded centromere (`blocked_region_bins`),
+    so blacklisted sequence buys no budget and the density is comparable across chromosomes -- unlike a
+    flat `N_loci`, which seeds chr21's 29 Mb as densely as chr1's 218 Mb. On the acrocentric chromosomes
+    (13/14/15/21/22) the observed span already starts past the centromere, so the centromere block falls
+    outside it and nothing is subtracted twice -- hence the clamped overlap rather than a bare difference.
+
+    This is a BUDGET, not a grid: detection still adds one locus per iteration at the largest remaining
+    residual, so two may land inside one `spacing` window and another window may get none. Never returns
+    less than 1.
+    """
+    tel_start, tel_end, cen_start, cen_end = blocked_region_bins(
+        cur_chrom, segment_size_dict=segment_size_dict, blocked_distance_th=blocked_distance_th)
+    small = segment_size_dict['small']
+    searchable = max(0, tel_end - tel_start) - max(0, min(tel_end, cen_end) - max(tel_start, cen_start))
+    return max(1, int(round(searchable * small / spacing)))
+
+
 @CALC_NEW()
 def detect_tsgs_ogs_for_all_length_scales(
     cur_chrom,
@@ -394,11 +436,9 @@ def detect_tsgs_ogs_for_all_length_scales(
     assert all([x['chrom']==cur_chrom for x in data_per_length_scale.values()]), f'Wrong data_per_length_scale for current chrom {cur_chrom}'
 
     blocked_distance_th_bin = int(blocked_distance_th / segment_size_dict['small'])
-    tel_cen_distance_th = max(blocked_distance_th, segment_size_dict['large'])
-    telomere_block_start = int((TELOMERES_OBSERVED.loc[cur_chrom, 'small']['chrom_start'] + tel_cen_distance_th) / segment_size_dict['small'])
-    telomere_block_end = int((TELOMERES_OBSERVED.loc[cur_chrom, 'small']['chrom_end'] - tel_cen_distance_th) / segment_size_dict['small'])
-    centromere_block_start = int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_start'] - tel_cen_distance_th) / segment_size_dict['small'])
-    centromere_block_end = int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end'] + tel_cen_distance_th) / segment_size_dict['small'])   
+    (telomere_block_start, telomere_block_end,
+     centromere_block_start, centromere_block_end) = blocked_region_bins(
+        cur_chrom, segment_size_dict=segment_size_dict, blocked_distance_th=blocked_distance_th)
 
     if length_scales_for_residuals is None:
         length_scales_for_residuals = np.arange(8).astype(int)

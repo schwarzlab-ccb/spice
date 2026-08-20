@@ -14,7 +14,8 @@ from spice.utils import (open_pickle, save_pickle, CALC_NEW,
 from spice.logging import log_debug, get_logger
 from spice.random_state import derive_seed, seed_task
 from spice.tsg_og.detection import (
-    collect_data_per_length_scale, detect_tsgs_ogs_for_all_length_scales, rank_loci, within_ci_fitness_filter,
+    collect_data_per_length_scale, detect_tsgs_ogs_for_all_length_scales, n_loci_from_spacing,
+    rank_loci, within_ci_fitness_filter,
     flip_up_down_assignment, final_optimization_step, limiting_fitness, infer_loci_widths, merge_overlapping_loci,
     calc_mse_loss, filter_loci, _optimize_selection_points, SelectionPoints)
 from spice.tsg_og.signal_bootstrap import bootstrap_sampling_of_signal
@@ -40,6 +41,7 @@ def run_loci_detection_per_chrom(
     which='full',
     name=None,
     N_loci=100,
+    N_loci_spacing=None,
     overwrite=False,
     overwrite_preprocessing=False,
     loci_results_dir=None,
@@ -78,6 +80,11 @@ def run_loci_detection_per_chrom(
         Project name (from config if not provided)
     N_loci : int, default=100
         Number of loci to detect
+    N_loci_spacing : float or None, default=None
+        If set, seed one locus per this many bp of SEARCHABLE sequence (padded telomere-to-telomere
+        span minus the padded centromere) instead of a flat `N_loci`, via
+        `detection.n_loci_from_spacing`. Makes the candidate density comparable across chromosomes;
+        a flat count seeds chr21's 29 Mb as densely as chr1's 218 Mb. Overrides `N_loci`.
     loci_results_dir : str, optional
         Output directory (auto-generated if not provided)
     overwrite_preprocessing : bool, default=False
@@ -161,6 +168,13 @@ def run_loci_detection_per_chrom(
     
     output_dir = os.path.join(loci_results_dir, 'detection', cur_chrom)
        
+    if N_loci_spacing:
+        # One locus per N_loci_spacing bp of searchable sequence, derived from the same blocked
+        # regions the residual search uses (see detection.n_loci_from_spacing).
+        N_loci_flat, N_loci = N_loci, n_loci_from_spacing(
+            cur_chrom, N_loci_spacing, blocked_distance_th=detection_blocked_distance_th)
+        logger.info(f'N_loci from spacing: one locus per {N_loci_spacing/1e6:g} Mb of searchable '
+                    f'sequence on {cur_chrom} -> {N_loci} loci (flat N_loci={N_loci_flat} ignored)')
     logger.info(f'Running loci detection for chrom={cur_chrom}, name={name} and a maximum of {N_loci} loci.')
     logger.info(f'Steps to run: {" - ".join(which_steps)}')
     logger.info(f'Output will be saved to {output_dir}')

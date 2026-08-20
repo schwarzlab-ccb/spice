@@ -57,7 +57,8 @@ params:
 loci_detection:
   # De-novo loci detection parameters
   loci_steps: 'fast' # Steps to run: 'full', 'fast', combine, single step, or space-separated steps
-  N_loci: 100 # Number of loci to detect
+  N_loci: 100 # Number of loci to detect per chromosome (flat; ignored when N_loci_spacing is set)
+  N_loci_spacing: null # If set, seed one locus per this many bp of searchable sequence (padded telomere span minus padded centromere) instead of the flat N_loci, so the candidate density is comparable across chromosomes
   skip_up_down: False # Skip up/down assignment
   use_original_rank: False # Use original rank from detection instead of re-ranking
   N_bootstrap: 10 # Number of bootstrap samples for signal bootstrap
