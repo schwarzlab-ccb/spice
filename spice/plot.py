@@ -37,7 +37,10 @@ plt.rcParams.update({
 CHROMS = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
 CENTROMERES = data_loaders.load_centromeres()
 CHROM_LENS = data_loaders.load_chrom_lengths()
-HG19_CHR_CUM_STARTS = { 'chr1': 0, 'chr2': 249250621, 'chr3': 492449994, 'chr4': 690472424, 'chr5': 881626700, 'chr6': 1062541960, 'chr7': 1233657027, 'chr8': 1392795690, 'chr9': 1539159712, 'chr10': 1680373143, 'chr11': 1815907890, 'chr12': 1950914406, 'chr13': 2084766301, 'chr14': 2199936179, 'chr15': 2307285719, 'chr16': 2409817111, 'chr17': 2500171864, 'chr18': 2581367074, 'chr19': 2659444322, 'chr20': 2718573305, 'chr21': 2781598825, 'chr22': 2829728720, 'chrX': 2881033286, 'chrY': 3036303846}
+# Genome-linear start offset per chromosome: the cumulative sum of the preceding chromosomes'
+# lengths, so it follows the configured assembly instead of the hg19 literals this used to hold.
+CHR_CUM_STARTS = CHROM_LENS.cumsum().shift(1, fill_value=0).to_dict()
+HG19_CHR_CUM_STARTS = CHR_CUM_STARTS   # backwards-compatible alias (now assembly-aware)
 CENTROMERES_OBSERVED = data_loaders.load_centromeres(observed=True, extended=False)
 CHROM_LENS = data_loaders.load_chrom_lengths()
 
@@ -843,7 +846,7 @@ def plot_hist(data, ax=None, bins=100, density=True, cumulative=False, orientati
 
 def plot_gains_losses_over_chrom(
           dat_consistent, events_in_segmentation, chrom, genes_of_interest=None, affected_samples=None,
-          chr_lengths=CHROM_LENS, chr_cum_starts=HG19_CHR_CUM_STARTS, tsg_og=None,
+          chr_lengths=CHROM_LENS, chr_cum_starts=CHR_CUM_STARTS, tsg_og=None,
           centromeres=CENTROMERES, figsize=(25, 12), title=None):
 
     fig = plt.figure(figsize=figsize)

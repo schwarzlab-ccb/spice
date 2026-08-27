@@ -26,6 +26,64 @@ logger = get_logger('data_loaders')
 CHROMS = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
 DATA_LOADERS_DIR = os.path.join(directories['results_dir'], 'data_loaders')
 
+# --- Reference assembly -------------------------------------------------------------------------
+# SPICE's packaged coordinate tables (chromosome lengths, centromeres, and the observed
+# centromere/telomere positions) were hg19-only, and nothing checked it: an hg38 cohort produced
+# plausible, wrong output rather than an error. The build is now a config parameter,
+# `params.assembly`, defaulting to hg19 so every existing config and cohort is unchanged.
+#
+# Why a config key and not an env var or a CLI flag: cli.py imports nothing assembly-dependent at
+# module level -- every heavy module is imported INSIDE its main_* function, after
+# spice.load_config() -- so by the time any `CHROM_LENS = load_chrom_lengths()` module constant is
+# evaluated, the config is already loaded. That makes a config key work with no change to those
+# constants or their call sites. It is also the only option that gets RECORDED: the pipeline stages an
+# immutable copy of its config per run, so the build a table was produced under stays visible
+# afterwards, which an env var never would be.
+#
+# hg19 keeps the original filenames, so its tables are byte-identical and no file was renamed.
+SUPPORTED_ASSEMBLIES = ('hg19', 'hg38')
+DEFAULT_ASSEMBLY = 'hg19'
+
+
+def get_assembly():
+    """The reference build for this run, from `params.assembly` (default hg19)."""
+    # Read the LIVE binding rather than the `config` imported at module scope: load_config()
+    # reassigns spice.config, so a stale reference would silently return the default.
+    import spice
+    cfg = getattr(spice, 'config', None)
+    name = DEFAULT_ASSEMBLY
+    if isinstance(cfg, dict):
+        name = (cfg.get('params') or {}).get('assembly', DEFAULT_ASSEMBLY) or DEFAULT_ASSEMBLY
+    if name not in SUPPORTED_ASSEMBLIES:
+        raise ValueError(
+            f"params.assembly = {name!r} is not supported (expected one of {SUPPORTED_ASSEMBLIES})")
+    return name
+
+
+def _assembly_filename(stem):
+    """objects/<stem>.tsv on hg19 (unchanged), objects/<stem>_<assembly>.tsv otherwise."""
+    assembly = get_assembly()
+    return f'{stem}.tsv' if assembly == DEFAULT_ASSEMBLY else f'{stem}_{assembly}.tsv'
+
+
+def _read_object_tsv(filename, **read_csv_kwargs):
+    """Read a packaged objects/*.tsv, with an error that names the generator when it is missing."""
+    if files is None:
+        raise FileNotFoundError(f"importlib.resources unavailable for {filename}")
+    try:
+        content = files('spice').joinpath('objects', filename).read_text()
+    except (TypeError, ImportError, AttributeError, FileNotFoundError) as exc:
+        raise FileNotFoundError(
+            f"Could not find {filename} in spice/objects/. Assembly-specific tables for a "
+            f"non-default build are generated outside this package: the static ones "
+            f"(chrom_lengths, centromeres, centromeres_ext) by "
+            f"pipeline-peak-detection/src/spice/make_assembly_tables.py, and the observed ones "
+            f"(centromeres_observed, telomeres_observed) by "
+            f"create_observed_centromeres_and_telomeres() on that cohort's own final_events.tsv "
+            f"(see its docstring -- it needs event inference to have run first)."
+        ) from exc
+    return pd.read_csv(StringIO(content), sep='\t', **read_csv_kwargs)
+
 
 def resolve_copynumber_file(return_raw=False) -> str:
     """Resolve the chromosome segments file path. """
@@ -107,7 +165,38 @@ def load_final_events():
     if not os.path.exists(filename):
         raise FileNotFoundError(f"Final events file not found at {filename}. Run SPICE event inference first")
     final_events_df = pd.read_csv(filename, sep='\t', dtype={'cn': str, 'diff': str})
+    verify_assembly(final_events_df)
     return final_events_df
+
+
+def verify_assembly(events_df, raise_on_mismatch=True):
+    """Cross-check the configured assembly against the coordinates actually present.
+
+    Without this, a wrong (or silently-ignored) `params.assembly` is undetectable: every downstream
+    number stays plausible. An event running past its chromosome's length in the configured build is
+    proof the build is wrong, so it is a hard error rather than a warning. Note it can only catch a
+    build whose chromosomes are SHORTER than the data -- hg38 read as hg19 trips 8 chromosomes
+    (chr18 +2.30 Mb, chr17 +2.06 Mb, ...), while hg19 read as hg38 does not, so the log line below
+    matters as much as the assertion.
+    """
+    assembly = get_assembly()
+    if events_df is None or len(events_df) == 0 or 'chrom' not in events_df or 'end' not in events_df:
+        return
+    lengths = load_chrom_lengths()
+    observed = events_df.groupby('chrom')['end'].max()
+    over = {c: (int(v), int(lengths.loc[c])) for c, v in observed.items()
+            if c in lengths.index and v > lengths.loc[c]}
+    n_exact = sum(1 for c, v in observed.items() if c in lengths.index and v == lengths.loc[c])
+    logger.info(f"Reference assembly: {assembly} "
+                f"({len(observed)} chromosomes in the events, {n_exact} reaching the exact "
+                f"chromosome length)")
+    if over:
+        detail = '; '.join(f"{c}: max end {v:,} > {assembly} length {l:,}" for c, (v, l) in over.items())
+        msg = (f"Events exceed {assembly} chromosome lengths on {len(over)} chromosome(s) -- "
+               f"params.assembly is wrong for this cohort. {detail}")
+        if raise_on_mismatch:
+            raise ValueError(msg)
+        logger.warning(msg)
 
 
 def load_segmentation(size=None, data_loaders_dir_top=DATA_LOADERS_DIR):
@@ -166,18 +255,11 @@ def load_centromeres(extended=True, observed=False, pad=None):
     '''Create file using create_observed_centromeres_and_telomeres'''
 
     assert not (extended and observed), 'Cannot have both extended and observed centromeres'
-    if files is None:
-        raise FileNotFoundError("importlib.resources unavailable for centromeres data")
-    filename = 'centromeres_ext.tsv' if extended else (
-        'centromeres_observed.tsv' if observed else 'centromeres.tsv'
+    stem = 'centromeres_ext' if extended else (
+        'centromeres_observed' if observed else 'centromeres'
     )
-    try:
-        content = files('spice').joinpath('objects', filename).read_text()
-    except (TypeError, ImportError, AttributeError, FileNotFoundError) as exc:
-        raise FileNotFoundError(f"Could not find {filename} in spice/objects/") from exc
-    centromeres = pd.read_csv(
-        StringIO(content),
-        sep='\t',
+    centromeres = _read_object_tsv(
+        _assembly_filename(stem),
         header=[0, 1] if observed else [0],
         index_col=0,
     )
@@ -190,15 +272,8 @@ def load_centromeres(extended=True, observed=False, pad=None):
 
 def load_telomeres_observed():
     '''Create file using create_observed_centromeres_and_telomeres'''
-    if files is None:
-        raise FileNotFoundError("importlib.resources unavailable for telomeres_observed.tsv")
-    try:
-        content = files('spice').joinpath('objects', 'telomeres_observed.tsv').read_text()
-    except (TypeError, ImportError, AttributeError, FileNotFoundError) as exc:
-        raise FileNotFoundError("Could not find telomeres_observed.tsv in spice/objects/") from exc
-    telomeres_observed = pd.read_csv(
-        StringIO(content),
-        sep='\t',
+    telomeres_observed = _read_object_tsv(
+        _assembly_filename('telomeres_observed'),
         header=[0, 1],
         index_col=0,
     )
@@ -244,14 +319,8 @@ def create_observed_centromeres_and_telomeres(final_events_df, segment_size_dict
 
 
 def load_chrom_lengths():
-    if files is None:
-        raise FileNotFoundError("importlib.resources unavailable for chrom_lengths.tsv")
-    try:
-        content = files('spice').joinpath('objects', 'chrom_lengths.tsv').read_text()
-    except (TypeError, ImportError, AttributeError, FileNotFoundError) as exc:
-        raise FileNotFoundError("Could not find chrom_lengths.tsv in spice/objects/") from exc
-    chrom_lengths = pd.read_csv(StringIO(content), sep='\t').set_index('chrom')['chrom_length']
-    return chrom_lengths
+    """Chromosome lengths for the configured assembly (see get_assembly)."""
+    return _read_object_tsv(_assembly_filename('chrom_lengths')).set_index('chrom')['chrom_length']
 
 
 def format_chromosomes(ds):

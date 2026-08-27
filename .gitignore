@@ -21,6 +21,11 @@ dist
 *.pickle
 *.placeholder
 *.tsv
+# ...but the PACKAGED reference tables under spice/objects/ are source, not data: the loaders
+# read them from the installed package (see data_loaders._read_object_tsv), so a table that is
+# silently untracked works locally and breaks on a fresh install. The hg19 ones were already
+# force-added; this makes that explicit and covers the per-assembly tables added since.
+!spice/objects/*.tsv
 *.yaml
 
 logs/*

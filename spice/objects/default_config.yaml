@@ -10,6 +10,12 @@ params:
   # Overridable per command with --seed. Caveats: wall-clock limits (time_limit_*) and an unset
   # PYTHONHASHSEED can still make runs differ.
   seed: 42
+  # Reference assembly for the packaged coordinate tables (chromosome lengths, centromeres, and the
+  # observed centromere/telomere positions). 'hg19' or 'hg38'; hg19 reads the original filenames, so
+  # it is unchanged. A non-default build needs its tables present in spice/objects/ -- see
+  # data_loaders.get_assembly / _read_object_tsv for where they come from. load_final_events()
+  # cross-checks this against the coordinates in the events and raises on a mismatch.
+  assembly: 'hg19'
   # Logging
   logging_level: "INFO"
   # Input data
