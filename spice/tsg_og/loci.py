@@ -96,7 +96,8 @@ def create_loci_df(all_selection_points, all_loci_widths=None, nr_stds_widths=2,
     loci_df['end'] = loci_df['pos'] + loci_df['width'] / 2
     loci_df[[f'fitness_{LS_I_DICT_REV[i][0]}_{LS_I_DICT_REV[i][1]}' for i in range(8)]] = np.concatenate([np.stack(
         [[ls[0].fitness for ls in locus] for locus in list(zip(*chrom_selection_points))])
-        for chrom_selection_points in all_selection_points.values()], axis=0)
+        for chrom_selection_points in all_selection_points.values()
+        if len(chrom_selection_points[0])], axis=0)
     loci_df['type'] = np.where((loci_df[[f'fitness_{LS_I_DICT_REV[i][0]}_{LS_I_DICT_REV[i][1]}'
                                             for i in range(0, 8, 2)]] > 0).any(axis=1), 'OG', 'TSG')
     loci_df = loci_df.sort_values(by=['chrom', 'pos']).reset_index(drop=True)
@@ -186,6 +187,9 @@ def calculate_events_per_loci_df(loci_df, all_selection_points=None, final_event
     for col in part_cols:
         loci_df[col] = 0.
     for cur_chrom in CHROMS[:-1]:
+        cur_index = loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom').index
+        if len(cur_index) == 0:
+            continue
         if rates_and_events_per_loci is not None:
             total_events_per_loci = rates_and_events_per_loci[cur_chrom][1]
         else:
@@ -201,7 +205,6 @@ def calculate_events_per_loci_df(loci_df, all_selection_points=None, final_event
         if len(cur_added_events) == 0:
             continue
         cur_added_events = np.sum(np.stack(cur_added_events), axis=0)
-        cur_index = loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom').index
         loci_df.loc[cur_index, 'added_events'] = cur_added_events
         # Same alignment as the total above (loci ordered by rank_on_chrom, trailing element dropped).
         # A key whose event rate was zero is an int rather than an array, and its column stays 0.

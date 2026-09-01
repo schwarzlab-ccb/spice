@@ -913,6 +913,13 @@ def limiting_fitness(
 ):
     log_debug(logger, f'Limiting fitness')
 
+    # A preceding filter can legitimately remove every candidate on a chromosome.
+    # Keep that empty result flowing through the remaining stages instead of calling
+    # reductions such as np.max on zero loci.
+    if not raw_selection_points or not raw_selection_points[0]:
+        logger.warning(f'No loci to limit for {cur_chrom}; returning empty selection points.')
+        return copy_list_of_selection_points(raw_selection_points)
+
     assert all([x['chrom']==cur_chrom for x in data_per_length_scale.values()]), f'Wrong data_per_length_scale for current chrom {cur_chrom}'
 
     if ls_i_to_check is None:
@@ -1102,6 +1109,10 @@ def infer_loci_widths(
     - bootstrap_loci_widths (list): Inferred locus widths from bootstrap resampling.
     """
     log_debug(logger, f'Inferring locus widths for {cur_chrom}')
+
+    if not final_selection_points or not final_selection_points[0]:
+        logger.warning(f'No loci to size for {cur_chrom}; returning empty locus widths.')
+        return []
 
     assert num_bootstrap_iterations <= N_bootstrap, f'num_bootstrap_iterations ({num_bootstrap_iterations}) cannot be larger than N_bootstrap ({N_bootstrap})'
 
@@ -1357,6 +1368,10 @@ def filter_loci(
 ):
     
     log_debug(logger, f'Final locus filtering for {cur_chrom}')
+
+    if not final_selection_points or not final_selection_points[0]:
+        logger.warning(f'No loci to filter for {cur_chrom}; returning empty selection points.')
+        return copy_list_of_selection_points(final_selection_points)
 
     if loci_widths is None:
         loci_widths = np.zeros((len(final_selection_points[0]), 200))
