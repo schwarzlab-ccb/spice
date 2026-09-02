@@ -658,8 +658,14 @@ def combine_loci(
         logger.info(f'Assigned fitness p/q via assign_p_values (global BH-FDR; p_value = raw, '
                     f'q_value = BH-FDR q) and kept {len(final_loci_df)}/{n_before} loci with q_value < {p_value_threshold}')
     else:
-        # Skip p-value filtering and use all loci
+        # Skip p-value filtering and use all loci. `final_loci_df` must still be bound here --
+        # only the branch above promotes `loci_df` to it, so without this the shared log/return
+        # below raised UnboundLocalError and `combine` was unusable whenever the p-value was off.
+        # The path was dead until now: the CLI reads calculate_p_value from the config
+        # (cli.py: calc_p) and passes it straight through, and the pipeline's loci.yaml always
+        # sets it true, so only a config that turns the p-value off reaches this.
         logger.info('Skipping p-value filtering (calculate_p_value=False)')
+        final_loci_df = loci_df
         filtered_selection_points = all_selection_points
         filtered_loci_widths = all_loci_widths
 
