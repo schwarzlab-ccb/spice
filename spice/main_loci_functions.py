@@ -565,14 +565,10 @@ def run_loci_detection_per_chrom(
 def combine_loci(
     loci_results_dir: str,
     processed_events: Optional[pd.DataFrame] = None,
-    p_values_N_random: int = 10_000,
-    p_values_N_iterations: int = 1_000,
     calculate_p_value: bool = False,
     p_value_threshold: float = 0.05,
-    p_values_mode: str = 'random',
-    p_values_optimize_ls_separately: bool = False,
-    p_values_within_ci_filtering: bool = False,
-    p_value_cores: int = 1,
+    permutation_null: Optional[pd.DataFrame] = None,
+    p_values_strategy: str = 'zpool',
     overwrite: bool = False,
     mode: str = 'detection',
 ) -> pd.DataFrame:
@@ -649,15 +645,11 @@ def combine_loci(
     
     if calculate_p_value:
         from spice.length_scales import LENGTH_SCALE_NAMES
-        data_per_length_scale_dirs = os.path.join(loci_results_dir, 'data_per_length_scale')
-        all_data_per_length_scale = {c: open_pickle(os.path.join(data_per_length_scale_dirs, f'{c}.pickle'))
-                    for c in loci_df['chrom'].unique()
-                    if os.path.exists(os.path.join(data_per_length_scale_dirs, f'{c}.pickle'))}
-        final_loci_df = assign_p_values(
-            loci_df, N_random=p_values_N_random, n_iterations_optim=p_values_N_iterations,
-            output_dir=loci_results_dir, data_per_length_scale=all_data_per_length_scale,
-            overwrite=False, mode=p_values_mode, optimize_ls_separately=p_values_optimize_ls_separately,
-            within_ci_filtering=p_values_within_ci_filtering, n_jobs=p_value_cores)
+        if permutation_null is None or not len(permutation_null):
+            raise ValueError(
+                'calculate_p_value=True needs a permutation null. Build one with `spice permute` '
+                '(or let loci detection build it inline) -- see spice.tsg_og.permutation.')
+        final_loci_df = assign_p_values(loci_df, permutation_null, strategy=p_values_strategy)
         # assign_p_values: p_value_raw = raw p, p_value = BH-FDR q. Remap to canonical raw p / FDR q.
         final_loci_df['q_value'] = final_loci_df['p_value']
         final_loci_df['p_value'] = final_loci_df.pop('p_value_raw')
@@ -676,7 +668,7 @@ def combine_loci(
             filtered_loci_widths[cur_chrom] = [
                 x for i, x in enumerate(all_loci_widths[cur_chrom]) if keep[i]]
         final_loci_df = final_loci_df[final_loci_df['q_value'] < p_value_threshold].reset_index(drop=True)
-        logger.info(f'Assigned fitness p/q via assign_p_values (global BH-FDR; p_value = raw, '
+        logger.info(f'Assigned fitness p/q from the permutation null (global BH-FDR; p_value = raw, '
                     f'q_value = BH-FDR q) and kept {len(final_loci_df)}/{n_before} loci with q_value < {p_value_threshold}')
     else:
         # Skip p-value filtering and use all loci. `final_loci_df` must still be bound here --
@@ -1022,12 +1014,9 @@ def loci_assignment(
     N_kernel: int = 100_000,
     within_ci_N_iterations: int = 10_000,
     N_iterations_optim: int = 11_000,
-    p_values_N_random: int = 10_000,
-    p_values_N_iterations: int = 1_000,
-    p_values_mode: str = 'random',
-    p_values_optimize_ls_separately: bool = False,
-    p_values_within_ci_filtering: bool = False,
     p_value_threshold: float = 0.05,
+    permutation_null: Optional[pd.DataFrame] = None,
+    p_values_strategy: str = 'zpool',
     overwrite: bool = False,
     overwrite_preprocessing: bool = False,
     calculate_p_value: bool = True,
@@ -1143,12 +1132,9 @@ def loci_assignment(
     final_loci_df, filtered_selection_points, filtered_loci_widths = combine_loci(
         loci_results_dir=loci_results_dir,
         processed_events=processed_events,
-        p_values_N_random=p_values_N_random,
-        p_values_N_iterations=p_values_N_iterations,
-        p_values_mode=p_values_mode,
-        p_values_optimize_ls_separately=p_values_optimize_ls_separately,
-        p_values_within_ci_filtering=p_values_within_ci_filtering,
         p_value_threshold=p_value_threshold,
+        permutation_null=permutation_null,
+        p_values_strategy=p_values_strategy,
         calculate_p_value=calculate_p_value,
         overwrite=overwrite,
         mode='assignment'

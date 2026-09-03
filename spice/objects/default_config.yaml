@@ -91,13 +91,15 @@ loci_detection:
   loci_assignment_N_iterations: 250 # Number of iterations for loci assignment optimization
   loci_assignment_within_ci_N_iterations: 100 # Number of iterations for within ci filtering
   # Loci combination and scoring parameters
-  p_values_N_random: 1000 # Number of random samples for p-value calculation
-  p_values_N_iterations: 1000 # Number of optimization iterations for p-value calculations
-  calculate_p_value: True # Whether to calculate p-values from scratch (if False, load from cache)
+  calculate_p_value: True # Whether to assign the fitness p-value at all
   p_value_threshold: 0.05 # Loci with q_value (BH-FDR fitness p) >= this are dropped from the output
-  p_values_mode: 'top' # How resimulation loci are chosen for p-value calculation ('random' or 'top')
-  p_values_optimize_ls_separately: False # Only used when p_values_mode='top'. If True, each length scale gets its own top-residual position and is optimized separately, instead of jointly optimizing one shared position
-  p_values_within_ci_filtering: False # If True, ablate each resim locus like detection's within_ci_filtering ablates the observed loci (zeroing a length scale the signal does not need), so the null's fitness is measured the same way the observed fitness is
+  # --- fitness p-value: the POSITIONAL-PERMUTATION null (replaced the resimulation null) ---
+  # The null is the pooled set of loci that detection finds on K positionally-permuted copies of the
+  # cohort, so null and observed loci come out of the identical detection cascade. Build it with
+  # `spice permute`; loci detection builds it inline at combine time if no null is on disk.
+  p_values_K: 16 # Permutations. The empirical p floors at 1/(pooled+1) and that floor binds the FDR (BH gives a tied block q = n*p/k), so do NOT lower this to save time
+  p_values_strategy: 'zpool' # How the null is stratified before the empirical p. 'zpool' standardizes within each (chrom, direction) by the NULL's own mean/sd then pools -- the only variant measured to be nominally calibrated. 'pooled' scores the raw statistic genome-wide (more precise, roughly half the recall). 'perchrom' is a diagnostic only: ~6-8 null loci per chromosome floors its p near 1/100, so the FDR can never reach significance
+  p_values_permute_mode: 'rotate' # 'rotate' shifts each (sample, chrom, arm) rigidly and preserves relative spacing; 'uniform' places each internal event independently
   # Event preprocessing parameters
   remove_plateaus: True # Remove events overlapping copy-number plateaus
   remove_chrY: True # Remove chrY events from analysis
