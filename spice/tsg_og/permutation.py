@@ -30,7 +30,12 @@ NULL_FILENAME = 'permutation_null.tsv'
 #: per-unit filename written by `spice permute --seed S --chrom C`
 UNIT_TEMPLATE = 'permutation_unit_s{seed}_{chrom}.tsv'
 DEFAULT_K = 16
-STRATEGIES = ('zpool', 'pooled', 'perchrom')
+STRATEGIES = ('zpool', 'zpool_chrom', 'pooled', 'perchrom')
+#: a (chrom, direction, arm) stratum with fewer null draws than this falls back to its chromosome:
+#: mu/sd from a handful of draws is noise, and the acrocentric p arms (chr13/14/15/21/22) plus a few
+#: gene-poor short arms genuinely hold almost no loci. Measured at K=16: 4-5 of ~80 arm strata fall
+#: below it, holding ~1% of null loci (smallest 6-7 draws, median stratum 54-87).
+MIN_STRATUM_DRAWS = 20
 
 
 # --------------------------------------------------------------------------------------- statistic
@@ -137,19 +142,32 @@ def permute_events(events_df, seed, mode='rotate', bounds=None):
 
 # ------------------------------------------------------------------------------------- null tables
 
+def assign_arm(chrom, pos, bounds=None):
+    """'p' or 'q' per locus, split at the observed centromere start (`large` scale)."""
+    if bounds is None:
+        bounds = arm_bounds()
+    mid = np.array([bounds[c][1] if c in bounds else np.inf for c in chrom], float)
+    return np.where(np.asarray(pos, float) < mid, 'p', 'q')
+
+
 def null_from_loci(loci_frames):
     """Pool per-permutation loci tables into the null: one row per null locus.
 
-    Keeps chrom + direction + the aggregate statistic + the four per-scale values, which is
-    everything the scoring needs; the loci's coordinates are irrelevant once pooled.
+    Keeps chrom, direction, ARM, pos, the aggregate statistic and the four per-scale values. `arm`
+    is the stratum the default scoring uses, and it belongs here rather than being recomputed later
+    because it is defined by the cohort's own observed centromere table -- the same one the
+    permutation rotated within. `pos` is kept so the arm call can be audited or redone.
     """
     parts = []
+    bounds = arm_bounds()
     for df in loci_frames:
         if not len(df):
             continue
         per_ls = fitness_per_ls(df)
         parts.append(pd.DataFrame({
             'chrom': df['chrom'].to_numpy(), 'direction': _direction(df),
+            'arm': assign_arm(df['chrom'].to_numpy(), df['pos'].to_numpy(), bounds),
+            'pos': df['pos'].to_numpy(float),
             'stat': per_ls.mean(axis=1),
             **{f'stat_{ls}': per_ls[:, j] for j, ls in enumerate(LENGTH_SCALE_NAMES)}}))
     if not parts:
@@ -172,19 +190,46 @@ def _z(values, mu, sd):
     return (np.asarray(values, float) - mu) / (sd if sd else 1.0)
 
 
+def _strata(chrom, direction, arm, null_df, level):
+    """Stratum key per locus, falling back from arm to chromosome where the arm is too thin."""
+    if level == 'chrom':
+        return list(zip(chrom, direction))
+    counts = null_df.groupby(['chrom', 'direction', 'arm']).size()
+    thin = {k for k, v in counts.items() if v < MIN_STRATUM_DRAWS}
+    return [(c, d) if (c, d, a) in thin else (c, d, a)
+            for c, d, a in zip(chrom, direction, arm)]
+
+
 def permutation_p(loci_df, null_df, strategy='zpool', column='stat'):
     """Empirical p of each observed locus against the pooled permutation null.
 
-    `zpool` (the default) standardizes within each (chrom, direction) stratum using the NULL's own
-    mean and sd, then pools the standardized values. That keeps the reference set large while
-    restoring the per-chromosome context plain pooling discards -- a permutation yields only ~6-8
-    loci per chromosome, so a per-stratum empirical p (`perchrom`) floors at ~1/100 and BH can then
-    never reach significance. `pooled` scores the raw statistic against a direction-matched
-    genome-wide reference: perfectly precise in practice but it costs recall, because a quiet
-    chromosome's loci are compared against a reference dominated by busy ones.
+    `zpool` (the default) standardizes within each stratum using that stratum's null draws, then
+    pools the standardized values. Pooling is what keeps the reference set large: a permutation
+    yields only ~6-8 loci per chromosome, so a per-stratum empirical p (`perchrom`) floors near
+    1/100 and BH can then never reach significance. Two details make the default the calibrated
+    choice, and both were measured rather than assumed:
 
-    mu/sd always come from the null, never from the observed loci, so no observed signal leaks into
-    its own reference.
+    * **The stratum is the ARM**, not the chromosome. `permute_events` rotates within the arm, so the
+      arm is the null's actual exchangeability unit and chromosome strata pool two arms the
+      permutation never mixed. Measured on a driver-free cohort this improves KS D 0.075 -> 0.062
+      AND finds more true drivers on the selection cohort (84 vs 81) at higher precision (86.6% vs
+      82.7%) -- a strict improvement. Arms holding fewer than MIN_STRATUM_DRAWS null loci fall back
+      to their chromosome.
+    * **The observed locus is included in its own stratum's mu/sd** (`add_one_in`). This matches the
+      +1 already in the empirical p: a value must be part of the calibration it is judged against,
+      or it is not exchangeable with the null. Without it mu/sd come from the null alone and an
+      observed locus can sit 7 sd outside its stratum and beat the entire pooled reference -- which
+      is exactly what put 2 loci at the p-floor on a driver-free cohort where 0.06 were expected.
+      With it, that cohort yields ZERO rejections. It costs ~7 true positives (77 vs 84), i.e. it
+      buys a balanced null with a little power.
+
+    `zpool_chrom` is the previous behaviour (chromosome strata, mu/sd from the null alone), kept so
+    earlier runs can be reproduced. `pooled` scores the raw statistic against a direction-matched
+    genome-wide reference: more precise, roughly half the recall, because a quiet chromosome's loci
+    are judged against a reference dominated by busy ones. `perchrom` is a diagnostic only.
+
+    mu/sd never see any observed locus other than the one being scored, so no other locus's signal
+    leaks into its reference.
     """
     if strategy not in STRATEGIES:
         raise ValueError(f'strategy must be one of {STRATEGIES}, got {strategy!r}')
@@ -194,38 +239,58 @@ def permutation_p(loci_df, null_df, strategy='zpool', column='stat'):
                 else fitness_per_ls(loci_df)[:, LENGTH_SCALE_NAMES.index(column.split('_', 1)[1])])
     direction = _direction(loci_df)
     chrom = loci_df['chrom'].to_numpy()
-    p = np.ones(len(loci_df))
 
     if strategy == 'pooled':
+        p = np.ones(len(loci_df))
         for dr in ('gain', 'loss'):
             m = direction == dr
             if m.any():
                 p[m] = _empirical_p(obs_stat[m], null_df.loc[null_df.direction == dr, column])
-    elif strategy == 'perchrom':
+        return p
+    if strategy == 'perchrom':
+        p = np.ones(len(loci_df))
         for (c, dr), g in null_df.groupby(['chrom', 'direction']):
             m = (chrom == c) & (direction == dr)
             if m.any():
                 p[m] = _empirical_p(obs_stat[m], g[column])
-    else:                                                                   # zpool
-        zo = np.full(len(loci_df), np.nan)
-        zn = []
-        for (c, dr), g in null_df.groupby(['chrom', 'direction']):
-            vals = g[column].to_numpy(float)
-            # ddof=1: the null draws are a SAMPLE of the stratum's null distribution, not the
-            # population. Stated explicitly because numpy defaults to ddof=0 and pandas to
-            # ddof=1, and the two disagree by ~3e-3 in the resulting p at ~100 draws/stratum.
-            mu, sd = float(vals.mean()), float(vals.std(ddof=1))
-            zn.append(_z(vals, mu, sd))
-            m = (chrom == c) & (direction == dr)
-            if m.any():
-                zo[m] = _z(obs_stat[m], mu, sd)
-        ref = np.concatenate(zn) if zn else np.zeros(1)
-        missing = np.isnan(zo)
-        if missing.any():
-            # An observed (chrom, direction) with no null loci at all: cannot be standardized, so
-            # it is scored at the bottom of the reference (p = 1) rather than silently as extreme.
-            logger.warning(f'{int(missing.sum())} loci have no matching null stratum '
-                           f'(chrom x direction); scored as non-significant')
-            zo[missing] = -np.inf
-        p = _empirical_p(zo, ref)
-    return p
+        return p
+
+    # ---- zpool / zpool_chrom ----
+    level = 'chrom' if strategy == 'zpool_chrom' else 'arm'
+    add_one_in = (strategy == 'zpool')
+    if level == 'arm' and 'arm' not in null_df.columns:
+        raise ValueError("the null has no 'arm' column -- it predates arm stratification; re-pool "
+                         "it with `spice permute --pool`, or score with strategy='zpool_chrom'")
+    arm = (assign_arm(chrom, loci_df['pos'].to_numpy()) if level == 'arm'
+           else np.array([''] * len(loci_df)))
+    obs_keys = _strata(chrom, direction, arm, null_df, level)
+    null_keys = _strata(null_df['chrom'].to_numpy(), null_df['direction'].to_numpy(),
+                        null_df['arm'].to_numpy() if level == 'arm' else
+                        np.array([''] * len(null_df)), null_df, level)
+
+    zo = np.full(len(loci_df), np.nan)
+    zn = []
+    by_key = {}
+    for k, v in zip(null_keys, null_df[column].to_numpy(float)):
+        by_key.setdefault(k, []).append(v)
+    for k, vals in by_key.items():
+        v = np.asarray(vals, float)
+        mu, sd = float(v.mean()), float(v.std(ddof=1)) if len(v) > 1 else 0.0
+        zn.append((v - mu) / (sd or 1.0))
+    ref = np.sort(np.concatenate(zn)) if zn else np.zeros(1)
+
+    for i, k in enumerate(obs_keys):
+        v = np.asarray(by_key.get(k, []), float)
+        if not len(v):
+            continue                      # no null in this stratum -> left at p = 1 below
+        if add_one_in:
+            v = np.append(v, obs_stat[i])
+        mu = float(v.mean())
+        sd = float(v.std(ddof=1)) if len(v) > 1 else 0.0
+        zo[i] = (obs_stat[i] - mu) / (sd or 1.0)
+    missing = np.isnan(zo)
+    if missing.any():
+        logger.warning(f'{int(missing.sum())} loci have no matching null stratum; '
+                       'scored as non-significant')
+        zo[missing] = -np.inf
+    return _empirical_p(zo, ref)

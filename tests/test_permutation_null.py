@@ -13,7 +13,11 @@ def _loci(n=6, seed=0):
     rng = np.random.default_rng(seed)
     # works for odd n too: a bare ['OG','TSG'] * (n//2) is empty at n=1
     d = {'chrom': ['chr1'] * (n // 2) + ['chr2'] * (n - n // 2),
-         'type': [('OG', 'TSG')[i % 2] for i in range(n)]}
+         'type': [('OG', 'TSG')[i % 2] for i in range(n)],
+         # `pos` is required now: the default stratification is per chromosome ARM, so both the
+         # null and the observed loci need a coordinate to be assigned one. Spread across both
+         # arms of each chromosome so the strata are populated.
+         'pos': [(20e6 if i % 2 else 200e6) for i in range(n)]}
     for ls in LENGTH_SCALE_NAMES:
         d[f'fitness_{ls}_gain'] = rng.uniform(-0.5, 2, n)
         d[f'fitness_{ls}_loss'] = rng.uniform(-0.5, 2, n)
@@ -95,8 +99,26 @@ class TestPValue:
     def test_null_from_loci_shape(self):
         null = null_from_loci([_loci(6, 0), _loci(6, 1)])
         assert len(null) == 12
-        assert {'chrom', 'direction', 'stat'} <= set(null.columns)
+        assert {'chrom', 'direction', 'arm', 'pos', 'stat'} <= set(null.columns)
         assert all(f'stat_{ls}' in null.columns for ls in LENGTH_SCALE_NAMES)
+        assert set(null['arm']) <= {'p', 'q'}
+
+    def test_zpool_needs_an_arm_column(self):
+        """A null pooled before arm stratification must fail loudly, not silently mis-stratify."""
+        null = null_from_loci([_loci(20, 0)]).drop(columns=['arm'])
+        with pytest.raises(ValueError, match='arm'):
+            permutation_p(_loci(6, 1), null, 'zpool')
+
+    def test_thin_arm_strata_fall_back_to_the_chromosome(self):
+        """An arm with < MIN_STRATUM_DRAWS null loci is scored against its whole chromosome."""
+        from spice.tsg_og.permutation import MIN_STRATUM_DRAWS, _strata
+        null = null_from_loci([_loci(60, s) for s in range(6)])
+        counts = null.groupby(['chrom', 'direction', 'arm']).size()
+        thin = [k for k, v in counts.items() if v < MIN_STRATUM_DRAWS]
+        keys = _strata(null['chrom'].to_numpy(), null['direction'].to_numpy(),
+                       null['arm'].to_numpy(), null, 'arm')
+        for c, d, a in thin:                      # a thin arm collapses to a 2-tuple
+            assert (c, d) in keys
 
     def test_null_from_loci_rejects_all_empty(self):
         with pytest.raises(ValueError, match='no null loci'):
@@ -113,7 +135,7 @@ class TestPValue:
 
     def test_a_locus_above_every_null_draw_hits_the_floor(self):
         null = null_from_loci([_loci(30, 0)])
-        obs = _loci(1, 0).assign(**{f'fitness_{ls}_gain': 1e6 for ls in LENGTH_SCALE_NAMES})
+        obs = _loci(2, 0).assign(**{f'fitness_{ls}_gain': 1e6 for ls in LENGTH_SCALE_NAMES})
         obs['type'] = 'OG'
         p = permutation_p(obs, null, 'pooled')
         assert p[0] == pytest.approx(1 / (len(null[null.direction == 'gain']) + 1))
