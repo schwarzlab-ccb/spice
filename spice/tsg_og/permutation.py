@@ -27,14 +27,12 @@ logger = get_logger('spice.permutation')
 
 #: pooled-null filename written by `spice permute --pool` and read by loci detection
 NULL_FILENAME = 'permutation_null.tsv'
-#: per-unit filename written by `spice permute --seed S --chrom C`
+#: per-unit filename template (scatter selection uses --index, not --seed)
 UNIT_TEMPLATE = 'permutation_unit_s{seed}_{chrom}.tsv'
 DEFAULT_K = 16
 STRATEGIES = ('zpool', 'zpool_chrom', 'pooled', 'perchrom')
-#: a (chrom, direction, arm) stratum with fewer null draws than this falls back to its chromosome:
-#: mu/sd from a handful of draws is noise, and the acrocentric p arms (chr13/14/15/21/22) plus a few
-#: gene-poor short arms genuinely hold almost no loci. Measured at K=16: 4-5 of ~80 arm strata fall
-#: below it, holding ~1% of null loci (smallest 6-7 draws, median stratum 54-87).
+#: If either arm has fewer draws than this, both arms use their chromosome/direction
+#: stratum. This avoids estimating calibration moments from a sparse or absent arm.
 MIN_STRATUM_DRAWS = 20
 
 
@@ -86,21 +84,53 @@ def arm_bounds():
     return out
 
 
+def _rotation_offset(starts, ends, lo, hi, rng):
+    """Uniformly choose an integer circular cut outside every event's interior.
+
+    A cut at an event boundary is valid; a cut through an event would require splitting
+    its interval. Gaps are half-open ranges of legal integer cuts, so touching events
+    leave a single legal cut between them and nested events do not add extra cuts.
+    """
+    lo, hi = int(np.ceil(lo)), int(np.floor(hi))
+    if hi <= lo:
+        return 0
+    cursor = lo
+    gaps = []
+    for start, end in sorted(zip(starts, ends)):
+        gap_end = min(int(np.floor(start)) + 1, hi)
+        if cursor < gap_end:
+            gaps.append((cursor, gap_end))
+        cursor = max(cursor, int(np.ceil(end)))
+    if cursor < hi:
+        gaps.append((cursor, hi))
+    total = sum(right - left for left, right in gaps)
+    if not total:
+        return 0
+    draw = int(rng.integers(total))
+    for left, right in gaps:
+        if draw < right - left:
+            return (lo - (left + draw)) % (hi - lo)
+        draw -= right - left
+
+
 def permute_events(events_df, seed, mode='rotate', bounds=None):
     """Permute internal-event POSITIONS within each chromosome arm. Returns (df, n_moved, n_fixed).
 
     Only rows with pos == "internal" move: `detection.get_cur_widths` filters on exactly that, so
     they are the only events detection consumes, and every other row passes through untouched so the
     frame stays a valid final_events table. Positions stay inside the arm the event already occupies
-    -- one offset per (sample, chrom, arm) under `mode='rotate'`, so the arm is rigidly shifted and
-    relative spacing survives; `mode='uniform'` places each event independently.
+    -- one circular offset per (sample, chrom, arm) under `mode='rotate'`, preserving
+    circular spacing and overlaps. Cuts are sampled uniformly from integer positions
+    outside event interiors, so no event is split at the arm boundary. `mode='uniform'`
+    places each event independently.
 
     Preserved: per-sample event burden, every width, chromosome and arm membership, non-internal
     positions. Destroyed: the cross-sample alignment of events at the same locus, which is precisely
     what recurrence detection keys on.
 
-    An event straddling the centromere belongs to neither arm and is LEFT IN PLACE (~4-5% of
-    internal events), so a little real recurrence survives: the null is mildly conservative there.
+    Internal events outside these bounds remain fixed. Dense groups can have few legal
+    cuts; a group containing an arm-spanning event can only retain its original position.
+    Counts report actual moved and fixed internal rows, including sampled identity moves.
     """
     if mode not in ('rotate', 'uniform'):
         raise ValueError(f"mode must be 'rotate' or 'uniform', got {mode!r}")
@@ -126,18 +156,23 @@ def permute_events(events_df, seed, mode='rotate', bounds=None):
 
     ok = internal & (arm != '')
     span = hi - lo
-    room = np.maximum(span - width, 1.0)          # keeps the event inside its arm
+    room = np.maximum(span - width, 0.0)
     if mode == 'uniform':
         start[ok] = lo[ok] + rng.uniform(0, 1, int(ok.sum())) * room[ok]
     else:
-        key = pd.Series(list(zip(ev['sample'].to_numpy()[ok], chrom[ok], arm[ok])))
-        codes, uniq = pd.factorize(key)
-        delta = rng.uniform(0, 1, len(uniq))[codes] * span[ok]
-        start[ok] = lo[ok] + np.mod(start[ok] - lo[ok] + delta, room[ok])
+        groups = {}
+        samples = ev['sample'].to_numpy()
+        for i in np.flatnonzero(ok):
+            groups.setdefault((samples[i], chrom[i], arm[i]), []).append(i)
+        for indices in groups.values():
+            lower, upper = lo[indices[0]], hi[indices[0]]
+            delta = _rotation_offset(start[indices], end[indices], lower, upper, rng)
+            start[indices] = lower + np.mod(start[indices] - lower + delta, upper - lower)
 
+    moved = internal & (np.rint(start) != events_df['start'].to_numpy())
     ev['start'] = np.rint(start).astype(np.int64)
     ev['end'] = np.rint(start + width).astype(np.int64)
-    return ev, int(ok.sum()), int(internal.sum() - ok.sum())
+    return ev, int(moved.sum()), int(internal.sum() - moved.sum())
 
 
 # ------------------------------------------------------------------------------------- null tables

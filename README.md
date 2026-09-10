@@ -110,8 +110,8 @@ under that seed; it does not replace `--seed`. Use the same config and base seed
 scattered unit and the pooling command:
 
 ```bash
-spice permute --config configs/loci_example.yaml --seed 7 --index 3 --chrom chr7
-spice permute --config configs/loci_example.yaml --seed 7 --pool
+spice permute --config cohort_loci.yaml --seed 7 --index 3 --chrom chr7
+spice permute --config cohort_loci.yaml --seed 7 --pool
 ```
 
 Run all required `(index, chromosome)` units before pooling. Omit `--seed` to use `params.seed`.
@@ -362,7 +362,28 @@ Coming soon!
 ### 4.2 Expected Input
 
 Loci detection requires:
-- **Event inference results**: `final_events.tsv` produced by the event_inference pipeline
+
+- **Event inference results**: `final_events.tsv` produced by the event-inference pipeline.
+- **Observed centromere and telomere tables**: set `input_files.centromeres_observed` and
+  `input_files.telomeres_observed` to tables derived from that same cohort. These are
+  cohort measurements, not interchangeable assembly reference files. Use the same pair
+  for observed detection, permutations, pooling, assignment, and loci plotting.
+
+For example, add these paths to your `cohort_loci.yaml` (relative paths use `directories.base_dir`):
+
+```yaml
+input_files:
+  final_events: data/final_events.tsv
+  centromeres_observed: data/centromeres_observed.tsv
+  telomeres_observed: data/telomeres_observed.tsv
+```
+
+The default permutation mode, `rotate`, applies a shared circular offset to internal
+events within each sample/chromosome/arm. It chooses a cut uniformly from integer
+positions in gaps or at event boundaries, preserving widths, overlaps, and circular
+spacing without splitting events. Dense groups have fewer legal cuts; an arm-spanning
+event prevents its group from moving. `uniform` instead places events independently
+within their arms. Events outside the observed arm bounds remain fixed.
 
 The default fitness p-value strategy, `zpool`, standardizes null loci within each
 chromosome, direction, and arm before pooling them. When either arm has fewer than 20
@@ -376,6 +397,12 @@ from the config (`fast`, `full`, or a complete stage list). Keep that recipe in 
 config and select combine-only or resume stages on the command line. `--overwrite`
 also rebuilds an existing null; for large cohorts, build it with scattered `spice permute`
 commands before combining.
+
+After upgrading from earlier `p-explore` results, use a new run name/directory and
+regenerate observed fits and every permutation unit. Previous caches and null tables
+encode the old RNG and rotation behavior; re-pooling those fits does not update them.
+The revised rotation and arm fallback change p/q values, so previous calibration and
+power measurements need to be rerun before being applied to these results.
 
 ### 4.3 Expected Output
 

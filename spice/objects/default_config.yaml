@@ -100,7 +100,7 @@ loci_detection:
   # `spice permute`; loci detection builds it inline at combine time if no null is on disk.
   p_values_K: 16 # Permutations. The empirical p floors at 1/(pooled+1) and that floor binds the FDR (BH gives a tied block q = n*p/k), so do NOT lower this to save time
   p_values_strategy: 'zpool' # Standardize within chromosome/direction/arm; pool both arms if either has fewer than 20 null loci. Include the scored locus in its own calibration. Alternatives: zpool_chrom, pooled, perchrom.
-  p_values_permute_mode: 'rotate' # 'rotate' shifts each (sample, chrom, arm) rigidly and preserves relative spacing; 'uniform' places each internal event independently
+  p_values_permute_mode: 'rotate' # 'rotate' uses a shared circular offset per sample/chrom/arm, cutting outside event interiors to preserve widths, overlaps and circular spacing; 'uniform' places events independently
   # Event preprocessing parameters
   remove_plateaus: True # Remove events overlapping copy-number plateaus
   remove_chrY: True # Remove chrY events from analysis

@@ -576,7 +576,7 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
     permuted, n_moved, n_fixed = permutation.permute_events(
         raw_events, seed=derive_seed('permutation', seed), mode=permute_mode)
     logger.info(f'  [permutation s{seed}] moved {n_moved:,} internal events'
-                + (f', left {n_fixed:,} centromere-straddling ones in place' if n_fixed else ''))
+                + (f', left {n_fixed:,} internal events fixed' if n_fixed else ''))
     processed = process_final_events_for_loci_routines(
         final_events_df=permuted,
         remove_plateaus=loci_params.get('remove_plateaus', True),
@@ -750,7 +750,7 @@ def main_permute(args):
         permuted, n_moved, n_fixed = permutation.permute_events(events_df, seed=derive_seed('permutation', args.index),
                                                              mode=mode)
         logger.info(f'Permutation s{args.index} ({mode}): moved {n_moved:,} internal events'
-                    + (f', left {n_fixed:,} centromere-straddling in place' if n_fixed else ''))
+                    + (f', left {n_fixed:,} internal events fixed' if n_fixed else ''))
         processed = process_final_events_for_loci_routines(
             final_events_df=permuted,
             remove_plateaus=loci_params.get('remove_plateaus', True),
@@ -1405,7 +1405,7 @@ Examples:
                                   'and exit, without detecting anything.')
     parser_perm.add_argument('--mode', choices=('rotate', 'uniform'), default=None,
                              help="Positional model: 'rotate' shifts each (sample, chrom, arm) "
-                                  "rigidly and preserves relative spacing; 'uniform' places each "
+                                  "circularly, cutting only between events; 'uniform' places each "
                                   "event independently. Default from p_values_permute_mode.")
     parser_perm.add_argument('--loci-steps', nargs='+', default=None,
                              help='Detection steps for the permuted cohorts; must match the real '
