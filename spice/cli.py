@@ -615,7 +615,7 @@ def _build_permutation_null(raw_events, config, loci_params, loci_results_dir, c
     """Build the pooled permutation null inline: K permuted cohorts, detected and pooled.
 
     Serial by design here -- each unit is itself a full genome detection pass, so the useful
-    parallelism is across units on a cluster (`spice permute --seed S --chrom C` + `--pool`), not
+    parallelism is across units on a cluster (`spice permute --index I --chrom C` + `--pool`), not
     across threads inside one process.
     """
     from spice.logging import get_logger
@@ -634,7 +634,7 @@ def main_permute(args):
 
     Three usages, all writing under <loci_results_dir>/permutations/:
       spice permute --config c.yaml                  build the whole null in-process, then pool
-      spice permute --config c.yaml --seed 3 --chrom chr7    one scatter unit
+      spice permute --config c.yaml --index 3 --chrom chr7    one scatter unit
       spice permute --config c.yaml --pool           pool the units already on disk
 
     The unit path exists because each permutation is itself a full detection pass, so the useful
@@ -656,6 +656,7 @@ def main_permute(args):
                       config_name=config['name'], level=log_level)
     logger = get_logger('SPICE', spice_prefix=False)
     logger.info('Running SPICE: Permutation-Null Mode')
+    _apply_seed(args, logger)
 
     loci_params = config['loci_detection']
     loci_results_dir = os.path.join(config['directories']['results_dir'], config['name'],
@@ -1364,7 +1365,7 @@ Examples:
                                   'unit. Its RNG stream derives from the base --seed, so the null '
                                   'is reproducible and every index is a different permutation.')
     parser_perm.add_argument('--chrom', default=None,
-                             help='Restrict a unit to this chromosome (requires --seed).')
+                             help='Restrict a unit to this chromosome (requires --index).')
     parser_perm.add_argument('--pool', action='store_true',
                              help='Pool the per-unit tables already on disk into the null table '
                                   'and exit, without detecting anything.')

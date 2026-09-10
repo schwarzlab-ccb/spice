@@ -105,6 +105,17 @@ it is* rather than on when it ran. Detecting loci on `chr7` alone therefore give
 detecting it as part of a whole-genome run, which is what makes scattering the work over a cluster
 safe. See `spice/random_state.py` for the mechanism.
 
+`spice permute` uses the same base seed as loci detection. `--index` selects a permutation
+under that seed; it does not replace `--seed`. Use the same config and base seed for every
+scattered unit and the pooling command:
+
+```bash
+spice permute --config configs/loci_example.yaml --seed 7 --index 3 --chrom chr7
+spice permute --config configs/loci_example.yaml --seed 7 --pool
+```
+
+Run all required `(index, chromosome)` units before pooling. Omit `--seed` to use `params.seed`.
+
 Two things fall outside the seed:
 
 - **Wall-clock limits.** `params.time_limit_all_solutions` / `time_limit_mcmc` (and CP-SAT's
