@@ -119,6 +119,11 @@ Rerunning a permutation unit invalidates its combined table and the pooled null.
 once all units finish. `spice permute --config <config> --pool --overwrite` also forces
 recombination of existing per-chromosome results, without rerunning detection.
 
+Loci preprocessing and each fitting stage use separate random streams. With the same
+inputs, parameters, and seed, rebuilding a stage gives the same result whether preceding
+stages were computed, cached, or loaded during a resumed run. When changing the seed,
+inputs, or parameters, use a new run name/directory so earlier caches are not reused.
+
 Two things fall outside the seed:
 
 - **Wall-clock limits.** `params.time_limit_all_solutions` / `time_limit_mcmc` (and CP-SAT's

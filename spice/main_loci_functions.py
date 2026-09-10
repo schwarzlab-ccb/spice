@@ -133,9 +133,8 @@ def run_loci_detection_per_chrom(
         Threshold for the mean directed fitness post-processing filter
     """
     
-    # One stream per chromosome, so a chromosome's loci are the same whether it was detected on its
-    # own (the pipeline scatters chr1-22 into separate jobs) or as part of a serial multi-chromosome
-    # run, where it would otherwise inherit wherever the previous chromosome left the stream.
+    # Each stochastic stage below also gets its own stream: preceding stages and
+    # preprocessing may run, load from cache, or be skipped during a resumed run.
     seed_task(derive_seed('loci_detection', cur_chrom))
 
     # Define all available steps
@@ -231,6 +230,7 @@ def run_loci_detection_per_chrom(
     
     # Detection step
     if 'detection' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'detection'))
         logger.info(f'Running detection')
         log_debug(logger, f'Output: {output_dir}/{filenames["detection"]}')
         
@@ -250,6 +250,7 @@ def run_loci_detection_per_chrom(
     
     # Flipping step
     if 'flipping' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'flipping'))
         logger.info(f'Running flipping')
         log_debug(logger, f'Output: {output_dir}/{filenames["flipping"]}')
         
@@ -268,6 +269,7 @@ def run_loci_detection_per_chrom(
     
     # Ranking step
     if 'ranking' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'ranking'))
         logger.info(f'Running ranking')
         log_debug(logger, f'Output: {output_dir}/{filenames["ranking"]}')
         
@@ -295,6 +297,7 @@ def run_loci_detection_per_chrom(
     
     # Within CI filtering step
     if 'within_ci_filtering' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'within_ci_filtering'))
         logger.info(f'Running within_ci_filtering')
         log_debug(logger, f'Output: {output_dir}/{filenames["within_ci_filtering"]}')
         
@@ -319,6 +322,7 @@ def run_loci_detection_per_chrom(
     
     # Limiting step
     if 'limiting' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'limiting'))
         logger.info(f'Running limiting')
         log_debug(logger, f'Output: {output_dir}/{filenames["limiting"]}')
         
@@ -342,6 +346,7 @@ def run_loci_detection_per_chrom(
     
     # Optimizing intermediate step
     if 'optimizing_intermediate' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'optimizing_intermediate'))
         logger.info(f'Running optimizing_intermediate')
         log_debug(logger, f'Output: {output_dir}/{filenames["optimizing_intermediate"]}')
         
@@ -360,6 +365,7 @@ def run_loci_detection_per_chrom(
     
     # locus widths intermediate step
     if 'loci_widths_intermediate' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'loci_widths_intermediate'))
         logger.info(f'Running loci_widths_intermediate')
         log_debug(logger, f'Output: {output_dir}/{filenames["loci_widths_intermediate"]}')
         
@@ -382,6 +388,7 @@ def run_loci_detection_per_chrom(
     
     # Merging step
     if 'merging' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'merging'))
         logger.info(f'Running merging')
         log_debug(logger, f'Output: {output_dir}/{filenames["merging"]}')
         
@@ -404,6 +411,7 @@ def run_loci_detection_per_chrom(
     
     # Optimizing step
     if 'optimizing' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'optimizing'))
         logger.info(f'Running optimizing')
         log_debug(logger, f'Output: {output_dir}/{filenames["optimizing"]}')
         
@@ -424,6 +432,7 @@ def run_loci_detection_per_chrom(
     
     # locus widths intermediate 2 step
     if 'loci_widths_intermediate_2' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'loci_widths_intermediate_2'))
         logger.info(f'Running loci_widths_intermediate_2')
         log_debug(logger, f'Output: {output_dir}/{filenames["loci_widths_intermediate_2"]}')
         
@@ -446,6 +455,7 @@ def run_loci_detection_per_chrom(
     
     # Filter loci intermediate 1 step
     if 'filter_loci_intermediate_1' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'filter_loci_intermediate_1'))
         logger.info(f'Running filter_loci_intermediate_1')
         log_debug(logger, f'Output: {output_dir}/{filenames["filter_loci_intermediate_1"]}')
         
@@ -475,6 +485,7 @@ def run_loci_detection_per_chrom(
     
     # Final within CI filtering step
     if 'final_within_ci_filtering' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'final_within_ci_filtering'))
         logger.info(f'Running final_within_ci_filtering')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_within_ci_filtering"]}')
         
@@ -496,6 +507,7 @@ def run_loci_detection_per_chrom(
     
     # Final filter loci step
     if 'final_filter_loci' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'final_filter_loci'))
         logger.info(f'Running final_filter_loci')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_filter_loci"]}')
         
@@ -518,6 +530,7 @@ def run_loci_detection_per_chrom(
 
     # Final limiting step
     if 'final_limiting' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'final_limiting'))
         logger.info(f'Running final_limiting')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_limiting"]}')
         
@@ -554,6 +567,7 @@ def run_loci_detection_per_chrom(
 
     # Final locus widths step
     if 'final_loci_widths' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'final_loci_widths'))
         logger.info(f'Running final_loci_widths')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_loci_widths"]}')
         
@@ -1000,6 +1014,7 @@ def run_loci_assignment_per_chrom(
     logger.info(f'Optimizing fitness for {cur_chrom} with fixed positions')
     up_down_order = (chrom_loci['type'] == 'OG').values
     
+    seed_task(derive_seed('loci_assignment', cur_chrom, 'optimizing'))
     optimized_selection_points, _, _ = _optimize_selection_points(
         N_iterations_optim,
         dummy_selection_points,
@@ -1015,6 +1030,7 @@ def run_loci_assignment_per_chrom(
     
     # Step 3: Apply within CI filtering
     logger.info(f'Applying within-CI filtering for {cur_chrom}')
+    seed_task(derive_seed('loci_assignment', cur_chrom, 'within_ci_filtering'))
     filtered_selection_points = within_ci_fitness_filter(
         cur_chrom,
         ranked_selection_points=optimized_selection_points,

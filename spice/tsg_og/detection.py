@@ -92,6 +92,8 @@ def collect_data_per_length_scale(
         N_bootstrap=1_000,
         N_kernel=100_000
         ):
+    # Kernel simulations must not inherit whether bootstrap signals were cached.
+    seed_task(derive_seed('collect_data_per_length_scale', cur_chrom, N_bootstrap, N_kernel))
     log_debug(logger, f'Collecting data for all length scales for {cur_chrom}') 
 
     plateau_events = final_events_df.query('plateau != "neither_left_nor_right"').copy().reset_index(drop=True)
