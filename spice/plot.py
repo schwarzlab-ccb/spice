@@ -41,7 +41,6 @@ CHROM_LENS = data_loaders.load_chrom_lengths()
 # lengths, so it follows the configured assembly instead of the hg19 literals this used to hold.
 CHR_CUM_STARTS = CHROM_LENS.cumsum().shift(1, fill_value=0).to_dict()
 HG19_CHR_CUM_STARTS = CHR_CUM_STARTS   # backwards-compatible alias (now assembly-aware)
-CENTROMERES_OBSERVED = data_loaders.load_centromeres(observed=True, extended=False)
 CHROM_LENS = data_loaders.load_chrom_lengths()
 
 ls_colors = {
@@ -1191,6 +1190,7 @@ def plot_tsg_og_results(
         gene_spacing=None
         ):
 
+    centromeres_observed = data_loaders.load_centromeres(observed=True, extended=False)
     colors = {
         ('gain', 'pos'): event_colors['gain'],
         ('gain', 'neg'): 'orange',
@@ -1275,7 +1275,7 @@ def plot_tsg_og_results(
                     alpha=1, c='C5', ls=':', lw=lw, zorder=5)
 
         ax.axhline(0, c='k', lw=lw)
-        ax.axvspan(*CENTROMERES_OBSERVED.loc[cur_chrom, data['length_scale']].values, color='grey', alpha=0.5, label='Centromere', zorder=9)
+        ax.axvspan(*centromeres_observed.loc[cur_chrom, data['length_scale']].values, color='grey', alpha=0.5, label='Centromere', zorder=9)
         ax.set_xlim(*xlim)
         if xlim[0] == 0 and xlim[1] == CHROM_LENS.loc[cur_chrom]:
             ax.set_xticks(np.arange(xlim[0], xlim[1], 1e7))

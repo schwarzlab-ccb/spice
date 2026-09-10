@@ -410,7 +410,8 @@ spice plotting --config <path/to/config> --plot-events-per-id <sample:chr:allele
 ```
 
 **Requirements:**
-- Plotting requires `final_events.tsv`.
+- Event plotting uses the event-inference config and `final_events.tsv`; cohort observed-centromere
+  and observed-telomere tables are not required.
 - Output PNGs are saved to `plot_dir/{name}/` (see `directories.plot_dir` in config; defaults to `plots/`).
 - `--plot-unit-size` switches per-sample plots to unit-size segments.
 
@@ -431,6 +432,8 @@ spice plotting --config <path/to/config> --plot-single-locus 3 --loci-mode detec
 
 **Requirements:**
 - Plotting requires `final_loci_detection.tsv` or `final_loci_assignment.tsv`.
+- Use the same `input_files.centromeres_observed` and `input_files.telomeres_observed`
+  tables used for detection or assignment.
 - Output PNGs are saved to `plot_dir/{name}/` (see `directories.plot_dir` in config; defaults to `plots/`).
 
 For interactive exploration, see `notebooks/loci_plotting.ipynb`.
