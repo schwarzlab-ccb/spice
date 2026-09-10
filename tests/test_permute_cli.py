@@ -69,3 +69,46 @@ def test_permute_applies_base_seed_in_every_mode(permutation_run, monkeypatch, m
         (root / 'permutations' / 's1').mkdir(parents=True)
     cli.main_permute(args)
     assert seen == [(expected_base, expected)]
+
+
+@pytest.mark.parametrize('overwrite', [False, True])
+def test_pool_overwrite_recombines_existing_unit_tables(permutation_run, monkeypatch, overwrite):
+    args, cfg, root, events = permutation_run
+    unit = root / 'permutations' / 's1'
+    unit.mkdir(parents=True)
+    locus_frame(1).to_csv(unit / 'unit_loci.tsv', sep='\t', index=False)
+    calls = []
+
+    def combine(**kwargs):
+        calls.append(kwargs['loci_results_dir'])
+        return locus_frame(99), {}, {}
+
+    monkeypatch.setattr(main_loci_functions, 'combine_loci', combine)
+    monkeypatch.setattr(permutation, 'permute_events', lambda frame, **kw: (frame, 1, 0))
+    args.pool, args.overwrite = True, overwrite
+    cli.main_permute(args)
+    assert len(calls) == int(overwrite)
+    null = pd.read_csv(root / permutation.NULL_FILENAME, sep='\t')
+    assert null['stat'].tolist() == [99 if overwrite else 1]
+
+
+def test_scatter_invalidates_tables_before_refitting(permutation_run, monkeypatch):
+    args, cfg, root, events = permutation_run
+    unit = root / 'permutations' / 's1'
+    unit.mkdir(parents=True)
+    locus_frame(1).to_csv(unit / 'unit_loci.tsv', sep='\t', index=False)
+    (root / permutation.NULL_FILENAME).write_text('old null')
+
+    def detect(**kwargs):
+        assert not (unit / 'unit_loci.tsv').exists()
+        assert not (root / permutation.NULL_FILENAME).exists()
+
+    monkeypatch.setattr(main_loci_functions, 'run_loci_detection_per_chrom', detect)
+    monkeypatch.setattr(permutation, 'permute_events', lambda frame, **kw: (frame, 1, 0))
+    monkeypatch.setattr(main_loci_functions, 'combine_loci', lambda **kw: (locus_frame(99), {}, {}))
+    args.index, args.chrom, args.overwrite = 1, 'chr1', True
+    cli.main_permute(args)
+    args.index, args.chrom, args.pool, args.overwrite = None, None, True, False
+    cli.main_permute(args)
+    null = pd.read_csv(root / permutation.NULL_FILENAME, sep='\t')
+    assert null['stat'].tolist() == [99]

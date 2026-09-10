@@ -544,6 +544,17 @@ def _permutation_unit_dir(loci_results_dir, seed):
     return os.path.join(loci_results_dir, 'permutations', f's{seed}')
 
 
+def _invalidate_permutation_tables(loci_results_dir, index):
+    """Invalidate derived tables before a unit can change, including concurrent scatter jobs."""
+    from spice.tsg_og.permutation import NULL_FILENAME
+    for path in (os.path.join(_permutation_unit_dir(loci_results_dir, index), 'unit_loci.tsv'),
+                 os.path.join(loci_results_dir, NULL_FILENAME)):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
 def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, seed, permute_mode,
                           steps, args, config):
     """Detect loci on ONE positionally-permuted copy of the cohort; return its loci table.
@@ -574,6 +585,7 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
         use_observed_centromeres=loci_params.get('use_observed_centromeres', True),
     )
     unit_dir = _permutation_unit_dir(loci_results_dir, seed)
+    _invalidate_permutation_tables(loci_results_dir, seed)
     os.makedirs(unit_dir, exist_ok=True)
     for chrom in chroms:
         run_loci_detection_per_chrom(
@@ -681,12 +693,12 @@ def main_permute(args):
         for d in unit_dirs:
             idx = int(os.path.basename(d)[1:])
             f = os.path.join(d, 'unit_loci.tsv')
-            if not os.path.exists(f):
+            if args.overwrite or not os.path.exists(f):
                 # A scattered `--index N --chrom C` run detects but does not combine, so the unit
                 # table may be missing. Rebuild it here: the permutation is deterministic (its
                 # stream derives from the base seed and the index), so re-deriving the permuted
                 # events costs seconds and reproduces exactly what the scatter detected.
-                logger.info(f'  s{idx}: no unit table; combining its per-chromosome results')
+                logger.info(f'  s{idx}: combining its per-chromosome results')
                 if raw_for_pool is None:
                     raw_for_pool = load_final_events()
                 permuted, _, _ = permutation.permute_events(
@@ -727,6 +739,7 @@ def main_permute(args):
             drop_duplicates=loci_params.get('drop_duplicates', True),
             use_observed_centromeres=loci_params.get('use_observed_centromeres', True))
         unit_dir = _permutation_unit_dir(loci_results_dir, args.index)
+        _invalidate_permutation_tables(loci_results_dir, args.index)
         os.makedirs(unit_dir, exist_ok=True)
         _detect_one(run_loci_detection_per_chrom, processed, args.chrom, steps, loci_params,
                     unit_dir, config, args)

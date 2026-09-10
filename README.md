@@ -115,6 +115,9 @@ spice permute --config configs/loci_example.yaml --seed 7 --pool
 ```
 
 Run all required `(index, chromosome)` units before pooling. Omit `--seed` to use `params.seed`.
+Rerunning a permutation unit invalidates its combined table and the pooled null. Pool again
+once all units finish. `spice permute --config <config> --pool --overwrite` also forces
+recombination of existing per-chromosome results, without rerunning detection.
 
 Two things fall outside the seed:
 
