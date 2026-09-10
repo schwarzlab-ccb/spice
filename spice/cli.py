@@ -622,6 +622,25 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
     return loci_df
 
 
+def _permutation_detection_steps(requested, configured):
+    """A fresh null needs a complete cascade even when the observed run only resumes/combines."""
+    for candidate in (requested, configured):
+        if not isinstance(candidate, str):
+            candidate = [step for step in candidate if step != 'combine']
+            if len(candidate) == 1:
+                candidate = candidate[0]
+        if isinstance(candidate, str):
+            if candidate in ('fast', 'full'):
+                return candidate
+            if candidate == 'detection+':
+                return 'full'
+        elif candidate and candidate[0] == 'detection' and 'final_loci_widths' in candidate:
+            return candidate
+    raise ValueError('Building a permutation null needs a complete detection cascade. Set '
+                     'loci_detection.loci_steps to fast, full, or a complete list of stages; '
+                     'use --loci-steps combine only as a command-line override.')
+
+
 def _build_permutation_null(raw_events, config, loci_params, loci_results_dir, chroms, K,
                             permute_mode, steps, args):
     """Build the pooled permutation null inline: K permuted cohorts, detected and pooled.
@@ -978,7 +997,9 @@ def main_loci_detection(args):
             null_df = _build_permutation_null(
                 raw_events=final_events_df, config=config, loci_params=loci_params,
                 loci_results_dir=loci_results_dir, chroms=list(chromosomes), K=p_values_K,
-                permute_mode=p_values_permute_mode, steps=steps_to_run, args=args)
+                permute_mode=p_values_permute_mode,
+                steps=_permutation_detection_steps(steps_to_run, loci_params['loci_steps']),
+                args=args)
             null_df.to_csv(null_path, sep='\t', index=False)
             logger.info(f'Wrote permutation null ({len(null_df):,} loci) to {null_path}')
     final_loci_df, filtered_selection_points, filtered_loci_widths = combine_loci(

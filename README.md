@@ -364,6 +364,14 @@ chromosome, direction, and arm before pooling them. When either arm has fewer th
 null loci, both arms use their combined chromosome/direction stratum. This includes
 arms with zero null loci, and each null locus enters the pooled reference once.
 
+To combine previously detected chromosomes, use
+`spice loci_detection --config <config> --loci-steps combine`. If no pooled permutation
+null exists, SPICE builds one using the complete `loci_detection.loci_steps` recipe
+from the config (`fast`, `full`, or a complete stage list). Keep that recipe in the
+config and select combine-only or resume stages on the command line. `--overwrite`
+also rebuilds an existing null; for large cohorts, build it with scattered `spice permute`
+commands before combining.
+
 ### 4.3 Expected Output
 
 Results are saved in `results/{name}`

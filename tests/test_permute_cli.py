@@ -112,3 +112,33 @@ def test_scatter_invalidates_tables_before_refitting(permutation_run, monkeypatc
     cli.main_permute(args)
     null = pd.read_csv(root / permutation.NULL_FILENAME, sep='\t')
     assert null['stat'].tolist() == [99]
+
+
+@pytest.mark.parametrize('configured', ['fast', 'full'])
+@pytest.mark.parametrize('overwrite', [False, True])
+def test_combine_builds_null_with_complete_detection_steps(permutation_run, monkeypatch,
+                                                         configured, overwrite):
+    args, cfg, root, events = permutation_run
+    args.snakemake = False
+    args.loci_steps = ['combine']
+    args.overwrite = overwrite
+    cfg['loci_detection']['loci_steps'] = configured
+    if overwrite:
+        root.mkdir(parents=True)
+        (root / permutation.NULL_FILENAME).write_text('old null')
+    seen = []
+    monkeypatch.setattr(main_loci_functions, 'run_loci_detection_per_chrom',
+                        lambda **kw: seen.append(kw['which']))
+    monkeypatch.setattr(permutation, 'permute_events', lambda frame, **kw: (frame, 1, 0))
+    cli.main_loci_detection(args)
+    assert seen == [configured]
+    assert (root.parent / 'final_loci_detection.tsv').exists()
+    assert pd.read_csv(root / permutation.NULL_FILENAME, sep='\t')['stat'].tolist() == [1]
+
+
+def test_resumed_detection_uses_configured_cascade_for_new_null():
+    assert cli._permutation_detection_steps('final_filter_loci+', 'full') == 'full'
+    complete = ['detection', 'flipping', 'final_filter_loci', 'final_loci_widths', 'combine']
+    assert cli._permutation_detection_steps(complete, 'fast') == complete[:-1]
+    with pytest.raises(ValueError, match='complete detection cascade'):
+        cli._permutation_detection_steps('combine', 'combine')
