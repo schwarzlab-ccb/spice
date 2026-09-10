@@ -195,38 +195,29 @@ def _strata(chrom, direction, arm, null_df, level):
     if level == 'chrom':
         return list(zip(chrom, direction))
     counts = null_df.groupby(['chrom', 'direction', 'arm']).size()
-    thin = {k for k, v in counts.items() if v < MIN_STRATUM_DRAWS}
-    return [(c, d) if (c, d, a) in thin else (c, d, a)
+    # Collapse BOTH arms to keep a disjoint partition of the reference: merely renaming
+    # the thin arm's key leaves its sample size unchanged. Missing arms count as zero.
+    fallback = {(c, d) for c, d in zip(null_df['chrom'], null_df['direction'])
+                if any(counts.get((c, d, a), 0) < MIN_STRATUM_DRAWS for a in ('p', 'q'))}
+    return [(c, d) if (c, d) in fallback else (c, d, a)
             for c, d, a in zip(chrom, direction, arm)]
 
 
 def permutation_p(loci_df, null_df, strategy='zpool', column='stat'):
     """Empirical p of each observed locus against the pooled permutation null.
 
-    `zpool` (the default) standardizes within each stratum using that stratum's null draws, then
-    pools the standardized values. Pooling is what keeps the reference set large: a permutation
-    yields only ~6-8 loci per chromosome, so a per-stratum empirical p (`perchrom`) floors near
-    1/100 and BH can then never reach significance. Two details make the default the calibrated
-    choice, and both were measured rather than assumed:
+    `zpool` standardizes within (chromosome, direction, arm), then pools the standardized
+    null draws. If either arm has fewer than MIN_STRATUM_DRAWS draws (including zero),
+    BOTH arms use the chromosome/direction stratum instead. Each null draw enters the
+    pooled reference exactly once. A chromosome/direction with no null draws scores p=1.
 
-    * **The stratum is the ARM**, not the chromosome. `permute_events` rotates within the arm, so the
-      arm is the null's actual exchangeability unit and chromosome strata pool two arms the
-      permutation never mixed. Measured on a driver-free cohort this improves KS D 0.075 -> 0.062
-      AND finds more true drivers on the selection cohort (84 vs 81) at higher precision (86.6% vs
-      82.7%) -- a strict improvement. Arms holding fewer than MIN_STRATUM_DRAWS null loci fall back
-      to their chromosome.
-    * **The observed locus is included in its own stratum's mu/sd** (`add_one_in`). This matches the
-      +1 already in the empirical p: a value must be part of the calibration it is judged against,
-      or it is not exchangeable with the null. Without it mu/sd come from the null alone and an
-      observed locus can sit 7 sd outside its stratum and beat the entire pooled reference -- which
-      is exactly what put 2 loci at the p-floor on a driver-free cohort where 0.06 were expected.
-      With it, that cohort yields ZERO rejections. It costs ~7 true positives (77 vs 84), i.e. it
-      buys a balanced null with a little power.
+    The observed locus is included in its stratum's mean and sample standard deviation
+    when standardizing that observation; the pooled null uses null-only moments.
 
-    `zpool_chrom` is the previous behaviour (chromosome strata, mu/sd from the null alone), kept so
-    earlier runs can be reproduced. `pooled` scores the raw statistic against a direction-matched
-    genome-wide reference: more precise, roughly half the recall, because a quiet chromosome's loci
-    are judged against a reference dominated by busy ones. `perchrom` is a diagnostic only.
+    `zpool_chrom` always uses chromosome/direction strata and null-only moments.
+    `pooled` compares raw fitness to a direction-matched genome-wide reference.
+    `perchrom` compares raw fitness within chromosome/direction; its smaller reference
+    gives a higher minimum attainable p-value.
 
     mu/sd never see any observed locus other than the one being scored, so no other locus's signal
     leaks into its reference.

@@ -356,6 +356,11 @@ Coming soon!
 Loci detection requires:
 - **Event inference results**: `final_events.tsv` produced by the event_inference pipeline
 
+The default fitness p-value strategy, `zpool`, standardizes null loci within each
+chromosome, direction, and arm before pooling them. When either arm has fewer than 20
+null loci, both arms use their combined chromosome/direction stratum. This includes
+arms with zero null loci, and each null locus enters the pooled reference once.
+
 ### 4.3 Expected Output
 
 Results are saved in `results/{name}`

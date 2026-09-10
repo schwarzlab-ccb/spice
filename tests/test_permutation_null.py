@@ -143,3 +143,36 @@ class TestPValue:
     def test_rejects_unknown_strategy(self):
         with pytest.raises(ValueError, match='strategy'):
             permutation_p(_loci(), null_from_loci([_loci()]), 'nope')
+
+
+@pytest.mark.parametrize('n_p', [0, 5, 19, 20])
+def test_arm_fallback_uses_a_disjoint_whole_chromosome(n_p):
+    from spice.tsg_og.permutation import _strata
+    null = pd.DataFrame({'chrom': ['chr1'] * (n_p + 100),
+                         'direction': ['gain'] * (n_p + 100),
+                         'arm': ['p'] * n_p + ['q'] * 100})
+    keys = _strata(null.chrom, null.direction, null.arm, null, 'arm')
+    if n_p < 20:
+        assert keys == [('chr1', 'gain')] * len(null)
+        assert _strata(['chr1'], ['gain'], ['p'], null, 'arm') == [('chr1', 'gain')]
+    else:
+        assert keys.count(('chr1', 'gain', 'p')) == 20
+        assert keys.count(('chr1', 'gain', 'q')) == 100
+
+
+@pytest.mark.parametrize('n_p', [0, 5])
+def test_sparse_arm_p_value_matches_whole_chromosome_calibration(n_p, monkeypatch):
+    from spice.tsg_og import permutation
+    monkeypatch.setattr(permutation, 'arm_bounds', lambda: BOUNDS)
+    values = np.r_[np.arange(1, n_p + 1), np.linspace(10, 20, 100)]
+    null = pd.DataFrame({'chrom': 'chr1', 'direction': 'gain',
+                         'arm': ['p'] * n_p + ['q'] * 100, 'stat': values})
+    obs = _loci(1).assign(chrom='chr1', type='OG', pos=20e6)
+    for ls in LENGTH_SCALE_NAMES:
+        obs[f'fitness_{ls}_gain'] = 12.0
+    augmented = np.r_[values, 12.0]
+    z_obs = (12 - augmented.mean()) / augmented.std(ddof=1)
+    z_null = (values - values.mean()) / values.std(ddof=1)
+    expected = (np.count_nonzero(z_null >= z_obs) + 1) / (len(values) + 1)
+    assert permutation_p(obs, null)[0] == pytest.approx(expected)
+    assert expected < 1
