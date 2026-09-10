@@ -26,6 +26,7 @@ dist
 # silently untracked works locally and breaks on a fresh install. The hg19 ones were already
 # force-added; this makes that explicit and covers the per-assembly tables added since.
 !spice/objects/*.tsv
+!tests/objects/*.tsv
 *.yaml
 
 logs/*
