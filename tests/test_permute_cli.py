@@ -35,7 +35,7 @@ def permutation_run(tmp_path, monkeypatch):
     monkeypatch.setattr(main_loci_functions, 'process_final_events_for_loci_routines',
                         lambda **kwargs: events)
     monkeypatch.setattr(main_loci_functions, 'run_loci_detection_per_chrom', lambda **kwargs: None)
-    monkeypatch.setattr(main_loci_functions, 'combine_loci', lambda **kwargs: (locus_frame(), {}, {}))
+    monkeypatch.setattr(main_loci_functions, 'combine_loci', lambda **kwargs: (locus_frame(), {}, {}, locus_frame()))
     args = argparse.Namespace(config_path='test.yaml', debug=False, log='terminal',
                               permutations=None, mode=None, loci_steps=None, pool=False,
                               chrom=None, index=None, seed=None, overwrite=False, cores=1)
@@ -81,7 +81,7 @@ def test_pool_overwrite_recombines_existing_unit_tables(permutation_run, monkeyp
 
     def combine(**kwargs):
         calls.append(kwargs['loci_results_dir'])
-        return locus_frame(99), {}, {}
+        return locus_frame(99), {}, {}, locus_frame(99)
 
     monkeypatch.setattr(main_loci_functions, 'combine_loci', combine)
     monkeypatch.setattr(permutation, 'permute_events', lambda frame, **kw: (frame, 1, 0))
@@ -105,7 +105,7 @@ def test_scatter_invalidates_tables_before_refitting(permutation_run, monkeypatc
 
     monkeypatch.setattr(main_loci_functions, 'run_loci_detection_per_chrom', detect)
     monkeypatch.setattr(permutation, 'permute_events', lambda frame, **kw: (frame, 1, 0))
-    monkeypatch.setattr(main_loci_functions, 'combine_loci', lambda **kw: (locus_frame(99), {}, {}))
+    monkeypatch.setattr(main_loci_functions, 'combine_loci', lambda **kw: (locus_frame(99), {}, {}, locus_frame(99)))
     args.index, args.chrom, args.overwrite = 1, 'chr1', True
     cli.main_permute(args)
     args.index, args.chrom, args.pool, args.overwrite = None, None, True, False
