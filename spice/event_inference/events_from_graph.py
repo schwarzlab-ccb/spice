@@ -1053,11 +1053,8 @@ def get_events_for_cur_start_ends_wgd(starts, ends, n_events, cn_profile, total_
                 'post', loh_pos, pre_wgd_diff=pre_wgd_diff, post_wgd_diffs=post_wgd_diffs,
                 post_wgd_state=post_wgd_state, total_cn=total_cn)
             
-            paths.append([(pre_wgd_path, path) for path, valid in zip(post_wgd_paths, post_wgd_valid) if valid])
-            paths = [path for path in paths if len(path) > 0] # remove empty paths
-
-    # slightly faster than paths.extend
-    paths = sum(paths, [])
+            paths.extend((pre_wgd_path, path)
+                         for path, valid in zip(post_wgd_paths, post_wgd_valid) if valid)
 
     return paths
 

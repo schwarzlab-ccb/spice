@@ -456,6 +456,10 @@ def _create_mcmc_proposal_wgd(cur_events, iteration, cn_profile, swap_event_base
             new_events = proposal_wgd_simple_swap(cur_events, swap_event_based_on_score, event_distances)
             cur_transition = 'simple_swap'
 
+        if new_events is not None and any(
+                start == end for epoch in new_events for start, end in epoch):
+            new_events = None
+
         n += 1
         if n > 1_000:
             # this can only happen on the very first proposal as the subsequent proposals are based on the previous ones
