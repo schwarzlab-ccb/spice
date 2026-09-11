@@ -7,8 +7,7 @@ directories:
 params:
   # Base RNG seed. Every random draw in SPICE derives from it (see spice/random_state.py), so the
   # same seed on the same input reproduces a run; change it to get an independent replicate.
-  # Overridable per command with --seed. Caveats: wall-clock limits (time_limit_*) and an unset
-  # PYTHONHASHSEED can still make runs differ.
+  # Overridable per command with --seed. Caveat: wall-clock limits (time_limit_*) can still make runs differ.
   seed: 42
   # Reference assembly for the packaged coordinate tables (chromosome lengths, centromeres, and the
   # observed centromere/telomere positions). 'hg19' or 'hg38'; hg19 reads the original filenames, so

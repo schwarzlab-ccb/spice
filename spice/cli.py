@@ -25,8 +25,7 @@ def _apply_seed(args, logger):
     """Fix this run's RNG seed: --seed, else params.seed from the config, else the default.
 
     Every SPICE command is stochastic, so this is what makes a run repeatable; see
-    spice.random_state for what the seed does and does not cover (wall-clock limits and
-    PYTHONHASHSEED are outside it).
+    spice.random_state for what the seed does and does not cover (wall-clock limits are outside it).
     """
     from spice import config
     from spice.random_state import set_seed

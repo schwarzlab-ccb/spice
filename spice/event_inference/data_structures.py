@@ -15,17 +15,9 @@ FullPaths = namedtuple(
 class McmcGuardExceeded(RuntimeError):
     """A configured ceiling stopped an MCMC work unit before it could run away.
 
-    Lives here (a leaf module with no spice imports) so both the MCMC and the CP-SAT layer can raise
-    it without an import cycle.
+    Lives here (leaf module, no spice imports) so both MCMC and CP-SAT can raise it without a cycle.
 
-    Raised as a normal exception ON PURPOSE: `_run_batch` already wraps every unit in try/except and
-    records failures to `failed_reports.tsv`, so a ceiling hit costs one reported unit instead of the
-    whole chunk. That is the entire point — an unbounded solve inside CP-SAT (C++) eventually dies of
-    SIGSEGV or the cgroup OOM killer, and neither can be caught per-unit, so it takes the process and
-    every other sample in the chunk with it (CNSistent chunk_0024, unit SP124441:chr9:cn_a).
-
-    Equally deliberate: the ceilings RAISE rather than degrade. A CP-SAT solve that silently gave up
-    at its time limit would return "no LOH solution", flipping a filter decision and quietly changing
-    the reconstruction; a truncated iteration budget would quietly return a worse optimum. A reported
-    failure is honest, a silently different answer is not.
+    Raised rather than degraded on purpose: an unbounded solve can SIGSEGV/OOM the whole process,
+    so `_run_batch` catches this per-unit and logs to `failed_reports.tsv` instead of losing the
+    chunk. A silent fallback (e.g. "no LOH solution") would quietly corrupt the reconstruction.
     """

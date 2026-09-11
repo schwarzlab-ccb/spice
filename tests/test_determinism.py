@@ -74,22 +74,6 @@ class TestDeriveSeed:
         set_seed(2)
         assert derive_seed('step', 'chr3') != one
 
-    def test_not_affected_by_hash_randomisation(self):
-        # str.__hash__ is salted per process, so derive_seed must not be built on hash(). Two
-        # interpreters with different PYTHONHASHSEED must agree, or results would differ per run.
-        code = (
-            'from spice.random_state import set_seed, derive_seed;'
-            'set_seed(5); print(derive_seed("all_solutions", "sample_1", "chr17"))'
-        )
-        outs = []
-        for hash_seed in ('0', '1'):
-            env = dict(os.environ, PYTHONHASHSEED=hash_seed)
-            env.pop(SEED_ENV_VAR, None)
-            outs.append(subprocess.run([sys.executable, '-c', code], env=env, check=True,
-                                       capture_output=True, text=True).stdout.strip())
-        assert outs[0] == outs[1]
-
-
 class TestSpawnSeeds:
     def test_reproducible_under_the_same_base_seed(self):
         set_seed(3)

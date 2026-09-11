@@ -105,16 +105,9 @@ it is* rather than on when it ran. Detecting loci on `chr7` alone therefore give
 detecting it as part of a whole-genome run, which is what makes scattering the work over a cluster
 safe. See `spice/random_state.py` for the mechanism.
 
-Two things fall outside the seed:
-
-- **Wall-clock limits.** `params.time_limit_all_solutions` / `time_limit_mcmc` (and CP-SAT's
-  internal time limit) make the result depend on machine speed and load. Leave them unset for
+One things fall outside the seed: **Wall-clock limits.** `params.time_limit_all_solutions` / `time_limit_mcmc` (and CP-SAT's internal time limit) make the result depend on machine speed and load. Leave them unset for
   reproducible runs.
-- **`PYTHONHASHSEED`.** Python salts string hashes per process, which reorders iteration over sets
-  of strings. The one place where this decided results — the event index map built from a set of
-  `Diff`s in `events_from_graph`, which fixed the row order of `final_events.tsv` — is now sorted
-  explicitly, so runs are reproducible without it. Exporting `PYTHONHASHSEED=0` remains a cheap
-  belt-and-braces guard against a set-of-strings ordering creeping back in.
+
 
 ## 2. Usage Overview
 
