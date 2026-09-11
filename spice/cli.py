@@ -523,7 +523,7 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
             th_locus_prominence=loci_params['th_locus_prominence'],
             th_locus_mean_fitness=loci_params['th_locus_mean_fitness'],
         )
-    loci_df, _, _ = combine_loci(loci_results_dir=unit_dir, processed_events=processed,
+    loci_df, _, _, _ = combine_loci(loci_results_dir=unit_dir, processed_events=processed,
                                  calculate_p_value=False, mode='detection')
     out = os.path.join(unit_dir, 'unit_loci.tsv')
     loci_df.to_csv(out, sep='\t', index=False)
@@ -636,7 +636,7 @@ def main_permute(args):
                     remove_chrY=loci_params.get('remove_chrY', True),
                     drop_duplicates=loci_params.get('drop_duplicates', True),
                     use_observed_centromeres=loci_params.get('use_observed_centromeres', True))
-                loci_df, _, _ = combine_loci(loci_results_dir=d, processed_events=processed,
+                loci_df, _, _, _ = combine_loci(loci_results_dir=d, processed_events=processed,
                                              calculate_p_value=False, mode='detection')
                 loci_df.to_csv(f, sep='\t', index=False)
             frames.append(pd.read_csv(f, sep='\t'))
@@ -805,6 +805,10 @@ def main_loci_detection(args):
     p_values_strategy = loci_params.get('p_values_strategy', 'zpool')
     p_values_permute_mode = loci_params.get('p_values_permute_mode', 'rotate')
     p_thresh = loci_params['p_value_threshold'] # loci with q_value >= this are dropped
+    # Absolute floor on the same statistic the p-value ranks, applied POST-NULL beside that drop.
+    # Absent/None = no floor. Distinct from detection's `th_locus_mean_fitness`, which filters the
+    # permutation null too -- see the note in combine_loci.
+    mean_fit_thresh = loci_params.get('mean_fitness_threshold')
     if calc_p:
         logger.info(f'Fitness p-value (permutation null): K={p_values_K}, '
                     f'strategy={p_values_strategy}, permute_mode={p_values_permute_mode}; '
@@ -882,11 +886,12 @@ def main_loci_detection(args):
                 args=args)
             null_df.to_csv(null_path, sep='\t', index=False)
             logger.info(f'Wrote permutation null ({len(null_df):,} loci) to {null_path}')
-    final_loci_df, filtered_selection_points, filtered_loci_widths = combine_loci(
+    final_loci_df, filtered_selection_points, filtered_loci_widths, unfiltered_loci_df = combine_loci(
         loci_results_dir=loci_results_dir,
         processed_events=processed_events,
         calculate_p_value=calc_p,
         p_value_threshold=loci_params['p_value_threshold'],
+        mean_fitness_threshold=mean_fit_thresh,
         permutation_null=null_df,
         p_values_strategy=p_values_strategy,
         overwrite=args.overwrite,
@@ -897,6 +902,14 @@ def main_loci_detection(args):
     final_loci_output_path = os.path.join(config['directories']['results_dir'], config['name'], 'final_loci_detection.tsv')
     final_loci_df.to_csv(final_loci_output_path, sep='\t', index=True)
     logger.info(f'Saved final combined loci detection results to {final_loci_output_path}')
+    # ... and the PRE-DROP table beside it. Whenever a threshold actually removes loci, the canonical
+    # table is the CALLED set, which is the wrong input for a calibration read: the QQ, cumulative,
+    # p-value-histogram and length-scale figures need every detected locus with its p/q. Identical to
+    # the canonical table on a cohort that drops nothing.
+    unfiltered_output_path = os.path.join(config['directories']['results_dir'], config['name'],
+                                          'final_loci_detection_unfiltered.tsv')
+    unfiltered_loci_df.to_csv(unfiltered_output_path, sep='\t', index=True)
+    logger.info(f'Saved the pre-filter loci table ({len(unfiltered_loci_df)} loci) to {unfiltered_output_path}')
     save_pickle(filtered_selection_points, os.path.join(config['directories']['results_dir'], config['name'], 'loci_of_selection', 'detection', 'final_loci_detection_filtered.pickle'))
     save_pickle(filtered_loci_widths, os.path.join(config['directories']['results_dir'], config['name'], 'loci_of_selection', 'detection', 'final_loci_detection_filtered_widths.pickle'))
 

@@ -23,6 +23,7 @@ from spice.tsg_og.simulation import copy_list_of_selection_points, convolution_s
 from spice.tsg_og.plateaus import categorize_events_by_plateau_overlap
 from spice.tsg_og.loci import (
     create_loci_df, assign_p_values, calculate_events_per_loci_df)
+from spice.tsg_og.permutation import fitness_statistic
 
 if sys.version_info >= (3, 9):
     from importlib.resources import files
@@ -613,11 +614,12 @@ def combine_loci(
     processed_events: Optional[pd.DataFrame] = None,
     calculate_p_value: bool = False,
     p_value_threshold: float = 0.05,
+    mean_fitness_threshold: Optional[float] = None,
     permutation_null: Optional[pd.DataFrame] = None,
     p_values_strategy: str = 'zpool',
     overwrite: bool = False,
     mode: str = 'detection',
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, Dict, Dict, pd.DataFrame]:
     """
     Combine results from all chromosomes after loci detection or assignment
     
@@ -702,20 +704,43 @@ def combine_loci(
         for ls in LENGTH_SCALE_NAMES:
             final_loci_df[f'q_value_{ls}'] = final_loci_df.pop(f'p_value_{ls}')      # BH-FDR per scale
             final_loci_df[f'p_value_{ls}'] = final_loci_df.pop(f'p_value_raw_{ls}')  # raw per scale
-        # Filter to significant loci (q_value < threshold): drop rows AND the matching selection points /
-        # widths (indexed per chromosome by rank_on_chrom, which numbers a chromosome's loci 0..n-1).
+        # The table BEFORE any drop -- returned so the caller can persist it. The calibration figures
+        # (QQ, cumulative, p-value histograms, length-scale coherence) need every detected locus with
+        # its p/q; reading them off a table filtered to the significant subset measures the threshold
+        # rather than the calibration.
+        unfiltered_loci_df = final_loci_df.copy()
+
+        # BOTH post-null drops, applied together so the selection points and widths stay in step with
+        # the table. They are deliberately here and not in detection:
+        #   q_value          -- significance against the permutation null.
+        #   mean fitness     -- an ABSOLUTE floor on the same statistic the p-value ranks
+        #                       (permutation.fitness_statistic). spice also has a detection-time
+        #                       version of this, `th_locus_mean_fitness`; applying it THERE also
+        #                       filters the permutation null, because the null is built by re-running
+        #                       detection on permuted events, and a null exists to produce weak loci.
+        #                       Measured on HMF: the null collapsed 13,964 -> 1,311 loci with 32 of 46
+        #                       (chrom,direction) strata empty and nothing could be scored. Applied
+        #                       here the null is intact and this selects among scored loci.
         n_before = len(final_loci_df)
+        fit = fitness_statistic(final_loci_df)
+        keep_all = (final_loci_df['q_value'].to_numpy() < p_value_threshold)
+        if mean_fitness_threshold is not None:
+            keep_all &= (fit > mean_fitness_threshold)
+        final_loci_df = final_loci_df.assign(_keep=keep_all)
         filtered_selection_points = dict()
         filtered_loci_widths = dict()
         for cur_chrom in list(all_selection_points.keys()):
-            keep = final_loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom')['q_value'].to_numpy() < p_value_threshold
+            keep = (final_loci_df.query('chrom == @cur_chrom')
+                                 .sort_values('rank_on_chrom')['_keep'].to_numpy())
             filtered_selection_points[cur_chrom] = [
                 [x for i, x in enumerate(track) if keep[i]] for track in all_selection_points[cur_chrom]]
             filtered_loci_widths[cur_chrom] = [
                 x for i, x in enumerate(all_loci_widths[cur_chrom]) if keep[i]]
-        final_loci_df = final_loci_df[final_loci_df['q_value'] < p_value_threshold].reset_index(drop=True)
+        final_loci_df = final_loci_df[final_loci_df['_keep']].drop(columns='_keep').reset_index(drop=True)
+        cut = f'q_value < {p_value_threshold}' + (
+            f' and mean fitness > {mean_fitness_threshold}' if mean_fitness_threshold is not None else '')
         logger.info(f'Assigned fitness p/q from the permutation null (global BH-FDR; p_value = raw, '
-                    f'q_value = BH-FDR q) and kept {len(final_loci_df)}/{n_before} loci with q_value < {p_value_threshold}')
+                    f'q_value = BH-FDR q) and kept {len(final_loci_df)}/{n_before} loci with {cut}')
     else:
         # Skip p-value filtering and use all loci. `final_loci_df` must still be bound here --
         # only the branch above promotes `loci_df` to it, so without this the shared log/return
@@ -725,11 +750,12 @@ def combine_loci(
         # sets it true, so only a config that turns the p-value off reaches this.
         logger.info('Skipping p-value filtering (calculate_p_value=False)')
         final_loci_df = loci_df
+        unfiltered_loci_df = loci_df
         filtered_selection_points = all_selection_points
         filtered_loci_widths = all_loci_widths
 
     log_debug(logger, f'Final loci dataframe: {len(final_loci_df)} loci across {final_loci_df["chrom"].nunique()} chromosomes')   
-    return final_loci_df, filtered_selection_points, filtered_loci_widths
+    return final_loci_df, filtered_selection_points, filtered_loci_widths, unfiltered_loci_df
 
 
 def process_final_events_for_loci_routines(
@@ -1177,7 +1203,7 @@ def loci_assignment(
 
     # Combine results
     logger.info('Combining per-chromosome results')
-    final_loci_df, filtered_selection_points, filtered_loci_widths = combine_loci(
+    final_loci_df, filtered_selection_points, filtered_loci_widths, _unfiltered = combine_loci(
         loci_results_dir=loci_results_dir,
         processed_events=processed_events,
         p_value_threshold=p_value_threshold,
