@@ -345,6 +345,14 @@ Loci detection requires:
   `input_files.telomeres_observed` to tables derived from that same cohort. These are
   cohort measurements, not interchangeable assembly reference files. Use the same pair
   for observed detection, permutations, pooling, assignment, and loci plotting.
+  Generate them with `data_loaders.create_observed_centromeres_and_telomeres(final_events_df)`
+  after loading the cohort's loci config. The generator applies the loci event filters,
+  including static centromere classification, the 5 Mb padding exclusion, width limits,
+  duplicates and configured plateau filtering. Observed-centromere refinement is skipped
+  during construction to avoid a circular dependency. Filtered internal events are pooled
+  across length scales, with centromere coordinates rounded to each scale's segment size.
+  Tables generated previously from raw events must be regenerated, followed by the observed
+  loci fits and all permutation units; cached results from the old boundaries cannot be reused.
 
 For example, add these paths to your `cohort_loci.yaml` (relative paths use `directories.base_dir`):
 

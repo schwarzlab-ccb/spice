@@ -305,15 +305,36 @@ def load_telomeres_observed():
 
 def create_observed_centromeres_and_telomeres(final_events_df, segment_size_dict=DEFAULT_SEGMENT_SIZE_DICT,
                                               length_scale_boundaries=DEFAULT_LENGTH_SCALE_BOUNDARIES):
-    # import here to avoid circular imports
+    """Derive cohort boundaries from events after the loci filters.
+
+    The configured plateau, chromosome and duplicate filters are applied together
+    with static centromere classification, 5 Mb padding exclusion and width limits.
+    Observed-centromere refinement is disabled because these tables are its input.
+    Filtered internal events are pooled across scales; centromere coordinates are
+    rounded to each scale's segment size.
+    """
+    from spice.loci_preprocessing import process_final_events_for_loci_routines
+    import spice
+
+    params = spice.config.get('loci_detection', {})
+    final_events_df = process_final_events_for_loci_routines(
+        final_events_df=final_events_df,
+        length_scale_boundaries=length_scale_boundaries,
+        remove_plateaus=params.get('remove_plateaus', True),
+        remove_chrY=params.get('remove_chrY', True),
+        drop_duplicates=params.get('drop_duplicates', True),
+        use_observed_centromeres=False,
+    )
+    if final_events_df.empty:
+        raise ValueError('No internal events remain after filtering for observed tables')
+    chroms = [c for c in CHROMS if c in set(final_events_df['chrom'])]
     centromeres = load_centromeres(extended=False)
 
-    actual_centro_pos = pd.DataFrame(index=CHROMS[:-1], columns=pd.MultiIndex.from_product([['small', 'mid1', 'mid2', 'large'], ['centro_start', 'centro_end']]))
-    actual_telomere_pos = pd.DataFrame(index=CHROMS[:-1], columns=pd.MultiIndex.from_product([['small', 'mid1', 'mid2', 'large'], ['chrom_start', 'chrom_end']]))
-    for cur_chrom in tqdm(CHROMS[:-1]):
+    actual_centro_pos = pd.DataFrame(index=chroms, columns=pd.MultiIndex.from_product([['small', 'mid1', 'mid2', 'large'], ['centro_start', 'centro_end']]))
+    actual_telomere_pos = pd.DataFrame(index=chroms, columns=pd.MultiIndex.from_product([['small', 'mid1', 'mid2', 'large'], ['chrom_start', 'chrom_end']]))
+    for cur_chrom in tqdm(chroms):
         for cur_length_scale in ['small', 'mid1', 'mid2', 'large']:
 
-            cur_length_scale_border = length_scale_boundaries[cur_length_scale]
             cur_events = final_events_df.query('pos == "internal" and chrom == @cur_chrom').copy()
             centro_center = centromeres.loc[cur_chrom].mean()
 
@@ -328,7 +349,10 @@ def create_observed_centromeres_and_telomeres(final_events_df, segment_size_dict
             actual_centro_pos.loc[cur_chrom, (cur_length_scale, 'centro_start')] = cur_start
 
             cur_end = cur_events.query('start > @centro_center')['start'].min()
-            cur_end = int(np.ceil(cur_end/segment_size_dict[cur_length_scale])*segment_size_dict[cur_length_scale])
+            if np.isnan(cur_end):
+                cur_end = centromeres.loc[cur_chrom, 'centro_end']
+            else:
+                cur_end = int(np.ceil(cur_end/segment_size_dict[cur_length_scale])*segment_size_dict[cur_length_scale])
             actual_centro_pos.loc[cur_chrom, (cur_length_scale, 'centro_end')] = cur_end
 
             actual_telomere_pos.loc[cur_chrom, (cur_length_scale, 'chrom_start')] = cur_events['start'].min()
