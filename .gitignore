@@ -23,6 +23,7 @@ dist
 *.tsv
 # force-include reference tables under spice/objects/
 !spice/objects/*.tsv
+!tests/objects/*.tsv
 *.yaml
 
 logs/*

@@ -143,3 +143,103 @@ class TestPValue:
     def test_rejects_unknown_strategy(self):
         with pytest.raises(ValueError, match='strategy'):
             permutation_p(_loci(), null_from_loci([_loci()]), 'nope')
+
+
+@pytest.mark.parametrize('n_p', [0, 5, 19, 20])
+def test_arm_fallback_uses_a_disjoint_whole_chromosome(n_p):
+    from spice.tsg_og.permutation import _strata
+    null = pd.DataFrame({'chrom': ['chr1'] * (n_p + 100),
+                         'direction': ['gain'] * (n_p + 100),
+                         'arm': ['p'] * n_p + ['q'] * 100})
+    keys = _strata(null.chrom, null.direction, null.arm, null, 'arm')
+    if n_p < 20:
+        assert keys == [('chr1', 'gain')] * len(null)
+        assert _strata(['chr1'], ['gain'], ['p'], null, 'arm') == [('chr1', 'gain')]
+    else:
+        assert keys.count(('chr1', 'gain', 'p')) == 20
+        assert keys.count(('chr1', 'gain', 'q')) == 100
+
+
+@pytest.mark.parametrize('n_p', [0, 5])
+def test_sparse_arm_p_value_matches_whole_chromosome_calibration(n_p, monkeypatch):
+    from spice.tsg_og import permutation
+    monkeypatch.setattr(permutation, 'arm_bounds', lambda: BOUNDS)
+    values = np.r_[np.arange(1, n_p + 1), np.linspace(10, 20, 100)]
+    null = pd.DataFrame({'chrom': 'chr1', 'direction': 'gain',
+                         'arm': ['p'] * n_p + ['q'] * 100, 'stat': values})
+    obs = _loci(1).assign(chrom='chr1', type='OG', pos=20e6)
+    for ls in LENGTH_SCALE_NAMES:
+        obs[f'fitness_{ls}_gain'] = 12.0
+    augmented = np.r_[values, 12.0]
+    z_obs = (12 - augmented.mean()) / augmented.std(ddof=1)
+    z_null = (values - values.mean()) / values.std(ddof=1)
+    expected = (np.count_nonzero(z_null >= z_obs) + 1) / (len(values) + 1)
+    assert permutation_p(obs, null)[0] == pytest.approx(expected)
+    assert expected < 1
+
+
+
+def test_rotation_preserves_circular_spacing_and_overlaps_with_unequal_widths():
+    ev = pd.DataFrame({'sample': ['S'] * 4, 'chrom': 'chr1', 'pos': 'internal',
+                       'start': [100, 100, 300, 650], 'end': [200, 400, 550, 750]})
+    ev['width'] = ev.end - ev.start
+    bounds = {'chr1': (0, 1000, 1100, 2000)}
+
+    def overlaps(frame):
+        starts, ends = frame.start.to_numpy(), frame.end.to_numpy()
+        return np.maximum(0, np.minimum(ends[:, None], ends) - np.maximum(starts[:, None], starts))
+
+    observed_moves = set()
+    for seed in range(32):
+        out, moved, fixed = permute_events(ev, seed, bounds=bounds)
+        shifts = (out.start.to_numpy() - ev.start.to_numpy()) % 1000
+        assert (shifts == shifts[0]).all()
+        assert out.start.iloc[0] == out.start.iloc[1]
+        np.testing.assert_array_equal(overlaps(out), overlaps(ev))
+        np.testing.assert_array_equal(out.end - out.start, ev.width)
+        assert (out.start >= 0).all() and (out.end <= 1000).all()
+        assert moved + fixed == len(ev)
+        observed_moves.add(int(shifts[0]))
+    assert len(observed_moves) > 1
+
+
+@pytest.mark.parametrize('mode', ['rotate', 'uniform'])
+def test_arm_spanning_event_has_no_room_to_move(mode):
+    ev = pd.DataFrame({'sample': ['S'], 'chrom': 'chr1', 'pos': 'internal',
+                       'start': [0], 'end': [1000], 'width': [1000]})
+    for seed in range(10):
+        out, moved, fixed = permute_events(ev, seed, mode=mode,
+                                          bounds={'chr1': (0, 1000, 1100, 2000)})
+        pd.testing.assert_frame_equal(out, ev)
+        assert (moved, fixed) == (0, 1)
+
+
+def test_adjacent_events_allow_a_cut_at_the_shared_boundary():
+    ev = pd.DataFrame({'sample': ['S', 'S'], 'chrom': 'chr1', 'pos': 'internal',
+                       'start': [0, 400], 'end': [400, 1000], 'width': [400, 600]})
+    outcomes = set()
+    for seed in range(16):
+        out, _, _ = permute_events(ev, seed, bounds={'chr1': (0, 1000, 1100, 2000)})
+        assert (out.end <= 1000).all()
+        outcomes.add(tuple(out.start))
+    assert outcomes == {(0, 400), (600, 0)}
+
+
+
+def test_rotation_samples_each_legal_integer_cut_once():
+    from spice.tsg_og.permutation import _rotation_offset
+    starts, ends = [1, 1, 4, 7], [3, 5, 6, 9]
+    legal = [cut for cut in range(10)
+             if not any(start < cut < end for start, end in zip(starts, ends))]
+
+    class FixedDraw:
+        def __init__(self, draw):
+            self.draw = draw
+
+        def integers(self, high):
+            assert high == len(legal)
+            return self.draw
+
+    offsets = [_rotation_offset(starts, ends, 0, 10, FixedDraw(draw))
+               for draw in range(len(legal))]
+    assert sorted(offsets) == sorted((-cut) % 10 for cut in legal)

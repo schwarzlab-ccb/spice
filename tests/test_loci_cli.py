@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import shutil
 import pytest
+
+import conftest
 import yaml
 import pandas as pd
 
@@ -50,6 +52,11 @@ def temp_workspace_with_loci():
             'input_files': {
                 'final_events': final_events_path if os.path.exists(pcawg_events) else None,
                 'plateaus': os.path.join(data_dir, 'plateaus.tsv') if os.path.exists(plateaus_src) else None,
+                # The CLI runs in a SUBPROCESS with this config, and a --config path wins over
+                # anything conftest injected into the parent's spice.config -- so the observed
+                # tables have to be named here too or loci detection exits with the
+                # `*_observed is not configured` FileNotFoundError. See tests/objects/README.md.
+                **conftest.TEST_OBSERVED_FILES,
             },
             'directories': {
                 'base_dir': tmpdir,
@@ -88,7 +95,15 @@ def temp_workspace_with_loci():
                 'loci_assignment_within_ci_N_iterations': 100,
                 'p_values_K': 2,
                 'calculate_p_value': True,
-                'p_value_threshold': 0.05,
+                # 1.01 keeps every detected locus, as the production pipeline does for the
+                # cohorts whose tables are read downstream. 0.05 CANNOT be satisfied here: K=2 on
+                # one chromosome gives a null of ~10 loci, so the empirical p floors at 1/11 =
+                # 0.091 -- already above 0.05 before BH-FDR runs. Detection still exits 0 and
+                # writes a header-only table, so the assertion that the table has rows failed
+                # while the sibling overwrite test (exit code + mtime only) did not notice.
+                # The p-value machinery is still exercised: p and q are computed, just not used
+                # to drop rows.
+                'p_value_threshold': 1.01,
                 'remove_plateaus': True,
                 'remove_chrY': True,
                 'drop_duplicates': True,
@@ -235,12 +250,34 @@ class TestLociDetectionExecution:
         assert second_mtime >= first_mtime, "File was not recreated with --overwrite flag"
     
 
+@pytest.fixture
+def temp_workspace_for_assignment(temp_workspace_with_loci):
+    """The loci workspace with the fitness p-value turned OFF, for loci_assignment.
+
+    Assignment mode has no per-chromosome detection of its own, so it cannot build a permutation
+    null inline the way loci_detection does -- it consumes one written beforehand by `spice permute`
+    (see cli._load_permutation_null_or_none). With calculate_p_value left on and no null on disk,
+    combine_loci raises `calculate_p_value=True needs a permutation null` and the run exits 1.
+
+    These tests are about assignment mechanics, so they switch the p-value off rather than build a
+    null; the p-value path is covered by the detection tests, which do build one inline (K=2).
+    """
+    tmpdir, config_path = temp_workspace_with_loci
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+    cfg['loci_detection']['calculate_p_value'] = False
+    assignment_config_path = os.path.join(tmpdir, 'test_loci_config_assignment.yaml')
+    with open(assignment_config_path, 'w') as f:
+        yaml.safe_dump(cfg, f)
+    return tmpdir, assignment_config_path
+
+
 class TestLociAssignmentExecution:
     """Loci assignment mode execution tests."""
     
-    def test_loci_assignment_basic_execution(self, temp_workspace_with_loci):
+    def test_loci_assignment_basic_execution(self, temp_workspace_for_assignment):
         """Test basic loci_assignment execution."""
-        tmpdir, config_path = temp_workspace_with_loci
+        tmpdir, config_path = temp_workspace_for_assignment
         
         result = subprocess.run(
             ['spice', 'loci_assignment', '--config', config_path],
@@ -280,9 +317,9 @@ class TestLociAssignmentExecution:
         for col in expected_columns:
             assert col in df.columns, f"Critical column containing '{col}' not found in output"
 
-    def test_loci_assignment_with_overwrite_flag(self, temp_workspace_with_loci):
+    def test_loci_assignment_with_overwrite_flag(self, temp_workspace_for_assignment):
         """Test loci_assignment execution with --overwrite flag."""
-        tmpdir, config_path = temp_workspace_with_loci
+        tmpdir, config_path = temp_workspace_for_assignment
         
         # First run
         result1 = subprocess.run(

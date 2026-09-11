@@ -152,3 +152,35 @@ class TestParallelPattern:
         for other in ('chr1', 'chr2', 'chr3'):
             self._task(other)
         assert self._task('chr7') == alone
+
+
+
+def test_detection_matches_with_cold_partial_and_warm_preprocessing_cache(tmp_path, repo_root_dir):
+    """Exercise real bootstrap/kernel sampling and fitting, including stage resumption."""
+    from pathlib import Path
+    import pandas as pd
+    from spice.main_loci_functions import (process_final_events_for_loci_routines,
+                                          run_loci_detection_per_chrom)
+    raw = pd.read_csv(Path(repo_root_dir) / 'data/pcawg_final_events_chr1_chr2.tsv',
+                      sep='\t', dtype={'diff': str}).query('chrom == "chr1"')
+    events = process_final_events_for_loci_routines(final_events_df=raw, remove_plateaus=False)
+    options = dict(final_events_df=events, cur_chrom='chr1', name='cache_test', N_loci=2,
+                   loci_results_dir=str(tmp_path), N_bootstrap=2, N_kernel=100,
+                   overwrite=True, overwrite_preprocessing=False,
+                   detection_N_iterations_base=5, detection_max_N_iterations=10,
+                   detection_final_N_iterations=10, flipping_N_iterations=2,
+                   flipping_N_iterations_single=2)
+
+    def fit(which):
+        set_seed(42)
+        result = run_loci_detection_per_chrom(which=which, **options)['flipping']
+        return np.array([[(p[0].pos, p[0].fitness) for p in track] for track in result])
+
+    stages = ['detection', 'flipping']
+    cold = fit(stages)
+    np.testing.assert_array_equal(cold, fit(stages))
+    # Rebuild stochastic kernels while keeping the bootstrap cache.
+    (tmp_path / 'data_per_length_scale' / 'chr1.pickle').unlink()
+    np.testing.assert_array_equal(cold, fit(stages))
+    # Resume after a persisted detection instead of consuming its RNG draws in-process.
+    np.testing.assert_array_equal(cold, fit('flipping'))

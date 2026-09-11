@@ -543,6 +543,17 @@ def _permutation_unit_dir(loci_results_dir, seed):
     return os.path.join(loci_results_dir, 'permutations', f's{seed}')
 
 
+def _invalidate_permutation_tables(loci_results_dir, index):
+    """Invalidate derived tables before a unit can change, including concurrent scatter jobs."""
+    from spice.tsg_og.permutation import NULL_FILENAME
+    for path in (os.path.join(_permutation_unit_dir(loci_results_dir, index), 'unit_loci.tsv'),
+                 os.path.join(loci_results_dir, NULL_FILENAME)):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
 def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, seed, permute_mode,
                           steps, args, config):
     """Detect loci on ONE positionally-permuted copy of the cohort; return its loci table.
@@ -564,7 +575,7 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
     permuted, n_moved, n_fixed = permutation.permute_events(
         raw_events, seed=derive_seed('permutation', seed), mode=permute_mode)
     logger.info(f'  [permutation s{seed}] moved {n_moved:,} internal events'
-                + (f', left {n_fixed:,} centromere-straddling ones in place' if n_fixed else ''))
+                + (f', left {n_fixed:,} internal events fixed' if n_fixed else ''))
     processed = process_final_events_for_loci_routines(
         final_events_df=permuted,
         remove_plateaus=loci_params.get('remove_plateaus', True),
@@ -573,6 +584,7 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
         use_observed_centromeres=loci_params.get('use_observed_centromeres', True),
     )
     unit_dir = _permutation_unit_dir(loci_results_dir, seed)
+    _invalidate_permutation_tables(loci_results_dir, seed)
     os.makedirs(unit_dir, exist_ok=True)
     for chrom in chroms:
         run_loci_detection_per_chrom(
@@ -609,12 +621,31 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
     return loci_df
 
 
+def _permutation_detection_steps(requested, configured):
+    """A fresh null needs a complete cascade even when the observed run only resumes/combines."""
+    for candidate in (requested, configured):
+        if not isinstance(candidate, str):
+            candidate = [step for step in candidate if step != 'combine']
+            if len(candidate) == 1:
+                candidate = candidate[0]
+        if isinstance(candidate, str):
+            if candidate in ('fast', 'full'):
+                return candidate
+            if candidate == 'detection+':
+                return 'full'
+        elif candidate and candidate[0] == 'detection' and 'final_loci_widths' in candidate:
+            return candidate
+    raise ValueError('Building a permutation null needs a complete detection cascade. Set '
+                     'loci_detection.loci_steps to fast, full, or a complete list of stages; '
+                     'use --loci-steps combine only as a command-line override.')
+
+
 def _build_permutation_null(raw_events, config, loci_params, loci_results_dir, chroms, K,
                             permute_mode, steps, args):
     """Build the pooled permutation null inline: K permuted cohorts, detected and pooled.
 
     Serial by design here -- each unit is itself a full genome detection pass, so the useful
-    parallelism is across units on a cluster (`spice permute --seed S --chrom C` + `--pool`), not
+    parallelism is across units on a cluster (`spice permute --index I --chrom C` + `--pool`), not
     across threads inside one process.
     """
     from spice.logging import get_logger
@@ -633,7 +664,7 @@ def main_permute(args):
 
     Three usages, all writing under <loci_results_dir>/permutations/:
       spice permute --config c.yaml                  build the whole null in-process, then pool
-      spice permute --config c.yaml --seed 3 --chrom chr7    one scatter unit
+      spice permute --config c.yaml --index 3 --chrom chr7    one scatter unit
       spice permute --config c.yaml --pool           pool the units already on disk
 
     The unit path exists because each permutation is itself a full detection pass, so the useful
@@ -655,6 +686,7 @@ def main_permute(args):
                       config_name=config['name'], level=log_level)
     logger = get_logger('SPICE', spice_prefix=False)
     logger.info('Running SPICE: Permutation-Null Mode')
+    _apply_seed(args, logger)
 
     loci_params = config['loci_detection']
     loci_results_dir = os.path.join(config['directories']['results_dir'], config['name'],
@@ -679,12 +711,12 @@ def main_permute(args):
         for d in unit_dirs:
             idx = int(os.path.basename(d)[1:])
             f = os.path.join(d, 'unit_loci.tsv')
-            if not os.path.exists(f):
+            if args.overwrite or not os.path.exists(f):
                 # A scattered `--index N --chrom C` run detects but does not combine, so the unit
                 # table may be missing. Rebuild it here: the permutation is deterministic (its
                 # stream derives from the base seed and the index), so re-deriving the permuted
                 # events costs seconds and reproduces exactly what the scatter detected.
-                logger.info(f'  s{idx}: no unit table; combining its per-chromosome results')
+                logger.info(f'  s{idx}: combining its per-chromosome results')
                 if raw_for_pool is None:
                     raw_for_pool = load_final_events()
                 permuted, _, _ = permutation.permute_events(
@@ -717,7 +749,7 @@ def main_permute(args):
         permuted, n_moved, n_fixed = permutation.permute_events(events_df, seed=derive_seed('permutation', args.index),
                                                              mode=mode)
         logger.info(f'Permutation s{args.index} ({mode}): moved {n_moved:,} internal events'
-                    + (f', left {n_fixed:,} centromere-straddling in place' if n_fixed else ''))
+                    + (f', left {n_fixed:,} internal events fixed' if n_fixed else ''))
         processed = process_final_events_for_loci_routines(
             final_events_df=permuted,
             remove_plateaus=loci_params.get('remove_plateaus', True),
@@ -725,6 +757,7 @@ def main_permute(args):
             drop_duplicates=loci_params.get('drop_duplicates', True),
             use_observed_centromeres=loci_params.get('use_observed_centromeres', True))
         unit_dir = _permutation_unit_dir(loci_results_dir, args.index)
+        _invalidate_permutation_tables(loci_results_dir, args.index)
         os.makedirs(unit_dir, exist_ok=True)
         _detect_one(run_loci_detection_per_chrom, processed, args.chrom, steps, loci_params,
                     unit_dir, config, args)
@@ -963,7 +996,9 @@ def main_loci_detection(args):
             null_df = _build_permutation_null(
                 raw_events=final_events_df, config=config, loci_params=loci_params,
                 loci_results_dir=loci_results_dir, chroms=list(chromosomes), K=p_values_K,
-                permute_mode=p_values_permute_mode, steps=steps_to_run, args=args)
+                permute_mode=p_values_permute_mode,
+                steps=_permutation_detection_steps(steps_to_run, loci_params['loci_steps']),
+                args=args)
             null_df.to_csv(null_path, sep='\t', index=False)
             logger.info(f'Wrote permutation null ({len(null_df):,} loci) to {null_path}')
     final_loci_df, filtered_selection_points, filtered_loci_widths = combine_loci(
@@ -1363,13 +1398,13 @@ Examples:
                                   'unit. Its RNG stream derives from the base --seed, so the null '
                                   'is reproducible and every index is a different permutation.')
     parser_perm.add_argument('--chrom', default=None,
-                             help='Restrict a unit to this chromosome (requires --seed).')
+                             help='Restrict a unit to this chromosome (requires --index).')
     parser_perm.add_argument('--pool', action='store_true',
                              help='Pool the per-unit tables already on disk into the null table '
                                   'and exit, without detecting anything.')
     parser_perm.add_argument('--mode', choices=('rotate', 'uniform'), default=None,
                              help="Positional model: 'rotate' shifts each (sample, chrom, arm) "
-                                  "rigidly and preserves relative spacing; 'uniform' places each "
+                                  "circularly, cutting only between events; 'uniform' places each "
                                   "event independently. Default from p_values_permute_mode.")
     parser_perm.add_argument('--loci-steps', nargs='+', default=None,
                              help='Detection steps for the permuted cohorts; must match the real '
