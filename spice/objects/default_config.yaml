@@ -6,14 +6,10 @@ directories:
 
 params:
   # Base RNG seed. Every random draw in SPICE derives from it (see spice/random_state.py), so the
-  # same seed on the same input reproduces a run; change it to get an independent replicate.
-  # Overridable per command with --seed. Caveat: wall-clock limits (time_limit_*) can still make runs differ.
+  # Overridable per command with --seed
   seed: 42
   # Reference assembly for the packaged coordinate tables (chromosome lengths, centromeres, and the
-  # observed centromere/telomere positions). 'hg19' or 'hg38'; hg19 reads the original filenames, so
-  # it is unchanged. A non-default build needs its tables present in spice/objects/ -- see
-  # data_loaders.get_assembly / _read_object_tsv for where they come from. load_final_events()
-  # cross-checks this against the coordinates in the events and raises on a mismatch.
+  # observed centromere/telomere positions). 'hg19' or 'hg38'.
   assembly: 'hg19'
   # Logging
   logging_level: "INFO"
@@ -36,17 +32,9 @@ params:
   mcmc_max_T: -6
   mcmc_min_T: 1
   mcmc_n_iterations_scale: 200
-  # Runaway ceilings for the large_chroms MCMC. Both default to None (off) = historical behaviour;
-  # when either fires the unit raises McmcGuardExceeded, which _run_batch records in
-  # failed_reports.tsv, so one pathological unit costs one unit instead of the whole chunk.
-  # mcmc_max_iterations: refuse a unit whose derived budget (n_events * mcmc_n_iterations_scale)
-  #   exceeds this. Guards hyper-fragmented chromosomes buying an enormous budget.
-  # mcmc_loh_solve_time_limit: seconds per CP-SAT solve in the proposal-time LOH filters, which are
-  #   otherwise UNBOUNDED (every sibling call site uses 1s). This is the ceiling that catches a
-  #   trajectory wedged inside ONE solve -- how CNSistent chunk_0024 reached ~73 GB and SIGSEGV'd
-  #   without finishing a single iteration. NB setting it makes results wall-clock dependent (see the
-  #   time_limit_* caveat above), but a hit is REPORTED rather than silently answered, so a run either
-  #   reproduces or tells you which unit it gave up on.
+  # Runaway ceilings for the large_chroms MCMC. Both default to None (off)..
+  # mcmc_max_iterations: refuse a unit whose derived budget (n_events * mcmc_n_iterations_scale) exceeds this.
+  # mcmc_loh_solve_time_limit: seconds per CP-SAT solve in the proposal-time LOH filters, which are otherwise UNBOUNDED
   mcmc_max_iterations: null
   mcmc_loh_solve_time_limit: null
   # Time limits (in seconds, per chromosome)
@@ -63,7 +51,7 @@ loci_detection:
   # De-novo loci detection parameters
   loci_steps: 'fast' # Steps to run: 'full', 'fast', combine, single step, or space-separated steps
   N_loci: 100 # Number of loci to detect per chromosome (flat; ignored when N_loci_spacing is set)
-  N_loci_spacing: null # If set, seed one locus per this many bp of searchable sequence (padded telomere span minus padded centromere) instead of the flat N_loci, so the candidate density is comparable across chromosomes
+  N_loci_spacing: null # If set, seed one locus per this many bp of searchable sequence
   skip_up_down: False # Skip up/down assignment
   use_original_rank: False # Use original rank from detection instead of re-ranking
   N_bootstrap: 10 # Number of bootstrap samples for signal bootstrap
@@ -93,10 +81,6 @@ loci_detection:
   # Loci combination and scoring parameters
   calculate_p_value: True # Whether to assign the fitness p-value at all
   p_value_threshold: 0.05 # Loci with q_value (BH-FDR fitness p) >= this are dropped from the output
-  # --- fitness p-value: the POSITIONAL-PERMUTATION null (replaced the resimulation null) ---
-  # The null is the pooled set of loci that detection finds on K positionally-permuted copies of the
-  # cohort, so null and observed loci come out of the identical detection cascade. Build it with
-  # `spice permute`; loci detection builds it inline at combine time if no null is on disk.
   p_values_K: 16 # Permutations. The empirical p floors at 1/(pooled+1) and that floor binds the FDR (BH gives a tied block q = n*p/k), so do NOT lower this to save time
   p_values_strategy: 'zpool' # Standardize within chromosome/direction/arm; pool both arms if either has fewer than 20 null loci. Include the scored locus in its own calibration. Alternatives: zpool_chrom, pooled, perchrom.
   p_values_permute_mode: 'rotate' # 'rotate' uses a shared circular offset per sample/chrom/arm, cutting outside event interiors to preserve widths, overlaps and circular spacing; 'uniform' places events independently

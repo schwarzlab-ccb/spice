@@ -37,8 +37,7 @@ plt.rcParams.update({
 CHROMS = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
 CENTROMERES = data_loaders.load_centromeres()
 CHROM_LENS = data_loaders.load_chrom_lengths()
-# Genome-linear start offset per chromosome: the cumulative sum of the preceding chromosomes'
-# lengths, so it follows the configured assembly instead of the hg19 literals this used to hold.
+# Genome-linear start offset per chromosome
 CHR_CUM_STARTS = CHROM_LENS.cumsum().shift(1, fill_value=0).to_dict()
 HG19_CHR_CUM_STARTS = CHR_CUM_STARTS   # backwards-compatible alias (now assembly-aware)
 CHROM_LENS = data_loaders.load_chrom_lengths()

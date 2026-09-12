@@ -33,20 +33,10 @@ Mcmc_result_full = namedtuple('Mcmc_result',
                          ['cur_id', 'best_score', 'scores', 'sv_overlaps', 'loh_filter_passed', 'best_events', 'best_diffs', 'best_sv_overlaps', 'is_accepted_iteration', 'scores_full', 'sv_overlaps_full', 'sv_selected_events', 'all_events', 'all_diffs'])
 
 
-# --- runaway guard for the LOH filters used during proposal construction -------------------------
-#
-# `_added_pre_loss_passes_loh_filter` and `_removed_pre_gain_passes_loh_filter` call CP-SAT with NO
-# time limit, unlike every sibling call site (which passes single_time_limit=1). They are reached from
-# 10 places across 6 proposal_* functions, so the limit is process-level state -- set once per unit by
-# solve_with_mcmc_wrapper -- rather than an 11th argument threaded through all of them.
-#
-# Why a guard is needed at all: one MCMC trajectory can wedge inside a single one of those solves and
-# grow without bound. CNSistent chunk_0024, unit SP124441:chr9:cn_a, reached ~73 GB and SIGSEGV'd
-# there -- never completing iteration 0, which is why an iteration ceiling cannot catch it. A native
-# crash or an OOM kill cannot be caught per-unit, so it destroys the whole chunk; a raised exception
-# costs exactly one unit (see McmcGuardExceeded).
-#
-# None = unbounded, i.e. the historical behaviour, so nothing changes unless a run opts in.
+# --- runaway guard for proposal-time LOH CP-SAT solves ------------------------------------------
+# `_added_pre_loss_passes_loh_filter` and `_removed_pre_gain_passes_loh_filter` can run unbounded.
+# The time limits below avoids rare trajectories that wedge in one solve, balloon memory, and crash a whole chunk.
+# `None` keeps historical behavior (no limit); set a value to opt in to the guard.
 _loh_solve_time_limit = None
 
 

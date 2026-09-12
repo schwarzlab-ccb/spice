@@ -172,13 +172,7 @@ def calculate_events_per_loci_df(loci_df, all_selection_points=None, final_event
     """Add `added_events` and its per-(length scale, direction) decomposition.
 
     `total_events_per_loci` is keyed by `(length_scale, direction)` -- the same eight combinations as
-    the `fitness_<ls>_<dir>` columns -- and `added_events` is their sum. Keeping the parts as
-    `added_events_<ls>_<dir>` lets a consumer weight the length scales itself (an added-events score
-    that drops the small scale, say) instead of only seeing the total. Without them that
-    decomposition has to be rebuilt outside the pipeline, which is how the old
-    `added_events_without_small` column came to exist and then be lost.
-
-    The total is unchanged: it is still the sum over all eight keys.
+    the `fitness_<ls>_<dir>` columns -- and `added_events` is their sum.
     """
     part_cols = [f'added_events_{ls}_{direction}'
                  for ls, direction in itertools.product(LENGTH_SCALE_NAMES, ['gain', 'loss'])]
@@ -493,15 +487,11 @@ def assign_p_values(loci_df, null_df, strategy='zpool'):
     The tested statistic is the mean optimized fitness over the four same-direction length scales.
     `null_df` is the pooled null written by `spice permute` (see spice.tsg_og.permutation): one row
     per locus that detection found on a positionally-permuted copy of the cohort, so null and
-    observed loci come out of the identical detection cascade. That is the property the old
-    resimulation null lacked, and the reason it could not be calibrated by tuning -- its loci
-    populated 2.00 of the four length scales against the observed 2.72, and the statistic is a mean
-    over four fixed slots.
+    observed loci come out of the identical detection cascade.
 
     Writes the raw (pre-FDR) p as `p_value_raw` and its BH-FDR value as `p_value`, plus the
     per-length-scale `p_value_raw_<ls>` and BH-FDR `p_value_<ls>` (the per-scale FDR applied jointly
-    across all scales) -- the same column contract the resim version produced, so callers are
-    unchanged.
+    across all scales).
 
     Args:
         loci_df: the combined loci table to score.

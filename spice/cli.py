@@ -267,8 +267,7 @@ def main_event_inference(args):
         skip_existing = config['params'].get('skip_existing', False)
         for wgd_status in ['nowgd', 'wgd']:
             is_wgd = (wgd_status == 'wgd')
-            # sorted: os.listdir returns filesystem order, so the work order (and every log line
-            # and fail-report row derived from it) would otherwise vary between identical runs.
+            # sorted for deterministic output
             cur_ids = [x.replace('.pickle', '')
                     for x in sorted(os.listdir(os.path.join(str(results_events_dir), wgd_status, 'chrom_data_full')))]
             if selected_ids is not None:
@@ -371,8 +370,7 @@ def main_event_inference(args):
                     skip_loh_check=skip_loh_check,
                     min_T=config['params']['mcmc_min_T'],
                     max_T=config['params']['mcmc_max_T'],
-                    # Runaway ceilings; None (default) = off. A hit raises McmcGuardExceeded, which
-                    # _run_batch turns into one row in failed_reports.tsv instead of a dead chunk.
+                    # Runaway ceilings; None (default) = off
                     max_iterations=config['params'].get('mcmc_max_iterations', None),
                     loh_solve_time_limit=config['params'].get('mcmc_loh_solve_time_limit', None),
                 )

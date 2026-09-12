@@ -1,18 +1,8 @@
 """Positional-permutation null for the fitness p-value.
 
-Replaces the resimulation null. The resim null drew each null locus from a single optimizer pass,
-while an observed locus is the survivor of the full multi-stage detection cascade, and the tested
-statistic is the MEAN OVER FOUR same-direction length scales with a fixed four-slot denominator. A
-null whose loci populate fewer scales than the observed ones is therefore beaten by construction --
-measured on a driver-free cohort, the resim null's loci carried 2.00 non-zero scales against the
-observed 2.72, and no setting of the old knobs fixed it (one was anti-conservative, the other
-conservative, and which was which flipped with cohort composition).
-
-This null closes that gap by construction: permute event POSITIONS in the real cohort, run the SAME
+Permute event positions in the real cohort, run the same
 detection on the result, and pool the loci it finds. Null loci are then produced by the same cascade
-as the observed ones, including every event-preprocessing and filtering step, so the asymmetry
-cannot arise. It also leaves a driver-free cohort free to VALIDATE the null, which scoring against
-that cohort's own loci could not (that is circular).
+as the observed ones, including every event-preprocessing and filtering step.
 
 See docs/PERMUTATION_NULL.MD in the pipeline repo for the derivation and the measured calibration.
 """

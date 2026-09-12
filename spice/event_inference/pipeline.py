@@ -234,10 +234,7 @@ def solve_with_mcmc_wrapper(
             f'truncating it.')
 
     # 2. Per-solve CP-SAT ceiling for the proposal-time LOH filters. This is the one that catches a
-    #    trajectory wedged inside a single solve -- the failure mode that killed CNSistent
-    #    chunk_0024 (SP124441:chr9:cn_a, ~73 GB then SIGSEGV) without ever finishing iteration 0, and
-    #    which the iteration ceiling above therefore cannot see. Process-level because 10 call sites
-    #    across 6 proposal_* functions reach those filters.
+    #    trajectory wedged inside a single solve.
     set_loh_solve_time_limit(loh_solve_time_limit)
 
     knn_train_data = load_knn_train()
@@ -333,8 +330,7 @@ def combine_final_events(solved_dirs, chrom_segments_file=None, sv_data=None,
         cur_dir_name = '/'.join(cur_dir.split('/')[-2:])
         log_debug(logger, f'Directory {cur_dir_i+1}/{len(solved_dirs)}: {cur_dir}')
         n_files = len(os.listdir(os.path.join(cur_dir)))
-        # sorted: this loop fixes the row order of final_events.tsv, and os.listdir returns
-        # filesystem order -- which differs between two otherwise identical runs.
+        # sorted for deterministic results
         for i, cur_file in enumerate(sorted(os.listdir(os.path.join(cur_dir)))):
             if not cur_file.endswith('.pickle'):
                 continue

@@ -26,12 +26,6 @@ logger = get_logger(__name__)
 
 def _make_solver_deterministic(solver):
     """Pin a CP-SAT solver to a reproducible search.
-
-    Two things make the default solver non-reproducible: it seeds its own search randomly, and it
-    runs a portfolio of strategies in parallel workers, so which solution comes back first (and in
-    which order `enumerate_all_solutions` yields them) is a race. One worker plus a seed drawn from
-    this thread's stream fixes both. Note this does not save a run that hits `max_time_in_seconds`:
-    a wall-clock cutoff is non-deterministic by construction.
     """
     solver.parameters.random_seed = int(np_rng().randint(0, 2 ** 31 - 1))
     solver.parameters.num_workers = 1
@@ -81,33 +75,6 @@ def full_paths_from_graph_with_sv(cur_id, is_wgd, sv_data, chrom_segments, chrom
             total_cn=total_cn,
             **kwargs)
     # WGD + a zero-CN segment: drop DEGENERATE solutions padded with an empty event.
-    #
-    # A segment already at CN 0 before the doubling stays 0 after it, so the loss is fully explained
-    # by the pre-WGD half and the post-WGD slot has nothing left to account for. The enumeration
-    # walks paths of length exactly `chrom.n_events`, so such a path can only be expressed by
-    # spending one of its steps on a no-op: a diff of all zeros, spanning no segment.
-    #
-    # `chrom.n_events` is NOT wrong. Measured on the fixture profile [0 3 0 4 0 2 0] (n_events 6,
-    # the real TCGA-33-AASD:chr18:cn_b profile): 683 solutions, of which **668 are clean** with six
-    # genuine events and only **15** carry the no-op (five real events padded to six). So the FST
-    # distance is right for the overwhelming majority and reducing the count would corrupt them;
-    # it is the padded minority that cannot be represented.
-    #
-    # They cannot simply be left in. An empty diff has no '1', so the coordinate conversion in
-    # raw_events_from_FullPaths -- `(diff.find('1'), diff.rfind('1')+1)` -- collapses to a single
-    # index, and since segment breakpoints are contiguous (`starts[i] == ends[i-1] + 1`) the width
-    # comes out as exactly -1. On the 2026-09-04 TCGA run that cost 275 work units across 239
-    # samples (7.9% of the WGD stratum), biased toward samples 1.83x more event-dense than average.
-    #
-    # Dropping them keeps every invariant the code downstream relies on -- the surviving solutions
-    # all total n_events and all have equal length -- and loses no explanation of the profile, since
-    # clean solutions remain. If ALL solutions are padded we must not invent one: fall through to the
-    # explicit error below, which reports the unit rather than emitting a no-op event.
-    #
-    # OPEN QUESTION, deliberately not decided here: whether those padded paths are spurious or are
-    # the only visible trace of a legitimate (n_events - 1) history that a fixed-budget enumeration
-    # cannot express. Answering it would change event counts for units that currently succeed, so it
-    # needs the model's owner. This change only stops the ones that currently CRASH.
     _padded = [i for i, diff in enumerate(diffs)
                if any(x.diff.find('1') == -1 for x in diff)]
     if _padded and len(_padded) < len(diffs):
@@ -115,17 +82,13 @@ def full_paths_from_graph_with_sv(cur_id, is_wgd, sv_data, chrom_segments, chrom
                           f'an empty (zero-span) event; {len(diffs) - len(_padded)} clean solutions remain')
         diffs = [diff for i, diff in enumerate(diffs) if i not in set(_padded)]
 
-    # sorted(), not raw set order: Diff carries string fields, and CPython randomises string hashing
-    # per process, so `enumerate(set(...))` handed out a different index to each event on every run.
-    # Those indices are what the solution Counters, the pickled FullPaths and ultimately the row
-    # order of final_events.tsv are built from -- the one thing a fixed seed could not pin down.
+    # sorted() is required here for deterministic output
     unique_events = {i: d for i, d in enumerate(sorted(set(item for sublist in diffs for item in sublist)))}
     unique_events_reversed = {v: k for k, v in unique_events.items()}
     diffs = [[unique_events_reversed[event] for event in diff] for diff in diffs]
     solutions = [Counter(diff) for diff in diffs]
-    # this is necessary because LOHs can create duplicate solutions (e.g. for profile 010)
-    # sorted for the same reason: the de-duplicating set is iterated, so its order would otherwise
-    # decide the order of the solution list.
+    # Creating unique solutions is necessary because LOHs can create duplicate solutions (e.g. for profile 010)
+    # sorted() is required here for deterministic output
     unique_solutions = [Counter({k: v for k, v in x})
                         for x in sorted({frozenset(c.items()) for c in solutions}, key=sorted)]
     log_debug(logger, f"Found {len(unique_events)} unique events")
@@ -134,9 +97,7 @@ def full_paths_from_graph_with_sv(cur_id, is_wgd, sv_data, chrom_segments, chrom
 
     if any([event.diff.find('1')==-1 for event in unique_events.values()]):
         raise ValueError('Invalid empty events found: EVERY solution is padded with a zero-span '
-                         'event, so there is no clean explanation of this profile to fall back on '
-                         '(the degenerate-solution filter above handles the mixed case). This is the '
-                         'WGD + zero-CN interaction; see the comment above the filter.')
+                         'event, so there is no clean explanation of this profile to fall back on.')
 
     if len(unique_solutions) == 1:
         if sv_selected_events is not None and (chrom.n_events - len(sv_selected_events)) <= 1 and chrom.n_events > 1:
@@ -656,11 +617,6 @@ def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, t
                                        return_all_solutions=True, shuffle_diffs=True,
                                        raise_on_time_limit=False):
     """`raise_on_time_limit`: treat a CP-SAT timeout as a reported failure, not as "no solution".
-
-    Without it, a solve that hits `single_time_limit` returns UNKNOWN with an empty solution array,
-    which is indistinguishable here from a genuine "no LOH solution exists" and silently flips the
-    caller's filter decision. Callers that bound the solve as a RUNAWAY GUARD (rather than as a
-    deliberate best-effort budget) pass True so the unit is reported instead of answered wrongly.
     """
 
     if len(diffs) == 0:
@@ -793,22 +749,14 @@ def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, t
             solver.solution_limit = 1
         status = solver.Solve(model, solver_solutions)
 
-        # A timeout returns UNKNOWN (nothing proven) with no solutions, which the check below cannot
-        # tell apart from "no LOH solution exists" -- so when the limit is a runaway guard, report the
-        # unit rather than let a flipped filter decision through as if it were a real answer.
+        # Report a timeout as a failure instead of "no solution found"
         if raise_on_time_limit and status == cp_model.UNKNOWN:
             # `n` is the count of boolean enforcement vars built into this model (it starts as the
-            # diff index at the top of the loop, then is reset to 0 and incremented per NewBoolVar --
-            # which is also why the debug line below reads oddly). Reporting it is the useful part:
-            # a model this size over a profile this short is the pathology, since the constraint set
-            # is combinatorial in the gain/loss pairing rather than in the profile length.
+            # diff index at the top of the loop, then is reset to 0 and incremented per NewBoolVar)
             raise McmcGuardExceeded(
                 f'LOH CP-SAT solve exceeded its {single_time_limit}s guard (status UNKNOWN): '
                 f'~{n} boolean enforcement vars over a {len(profile)}-segment profile, and the solver '
-                f'proved nothing within the budget -- so its empty result must NOT be read as "no LOH '
-                f'solution". Raising so the unit lands in failed_reports.tsv instead of taking the '
-                f'process down (unbounded, this solve reached ~73 GB and SIGSEGV\'d) or silently '
-                f'flipping the filter decision.')
+                f'proved nothing within the budget.')
 
         if len(solver_solutions.all_solutions) == 0:
             logger.debug(f'no loh solution found for solution {n}')

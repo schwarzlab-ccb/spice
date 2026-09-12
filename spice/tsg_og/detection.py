@@ -262,8 +262,7 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
     assert len(loci_to_optimize) > 0, 'No loci to optimize'
     assert N_iterations == 0 or N_iterations >= N_iterations_base, f'N_iterations ({N_iterations}) should be greater than N_iterations_base ({N_iterations_base})'
 
-    # data_per_length_scale is read-only for the rest of this function, so the loss's observed-signal
-    # side is constant across all N_iterations -- extract it once (see _prepare_mse_terms).
+    # extract information from data_per_length_scale once
     mse_terms = _prepare_mse_terms(data_per_length_scale)
 
     for iteration in range(N_iterations):
@@ -716,10 +715,7 @@ def rank_loci(
             if cluster_i in fixed_cluster_i:
                 return None, None
 
-            # Seeded per (chrom, iteration, cluster): joblib workers are separate processes with
-            # their own RNG state, so without this each cluster's optimisation would be drawn from
-            # OS entropy. Keyed on identity rather than call order so a cluster's result is the same
-            # serial or parallel, and at any n_cores.
+            # Seeded per (chrom, iteration, cluster) for deterministic results across parallelization and runs
             seed_task(derive_seed('rank_loci', cur_chrom, iteration, cluster_i))
 
             cur_selection_points = [[x[cluster_i]] for x in best_selection_points]
@@ -1137,8 +1133,6 @@ def infer_loci_widths(
         cur_chrom, data_per_length_scale, final_selection_points, segment_size_dict=segment_size_dict)
 
     def __optimize_for_bootstrap_iteration(bootstrap_iteration, cluster_i):
-        # Per-task stream, keyed on the bootstrap iteration and locus this call stands for (see
-        # _optimize_cluster above): reproducible across processes and independent of n_jobs.
         seed_task(derive_seed('infer_loci_widths', cur_chrom, cluster_i, bootstrap_iteration))
         mod_data_per_length_scale = deepcopy(data_per_length_scale)
         for ls_i in range(8):

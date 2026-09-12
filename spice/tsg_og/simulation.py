@@ -374,10 +374,7 @@ def _telomere_bounds(cur_chrom, cur_length_scale):
 
     Memoised because it is a per-key constant that sits on the hottest path in the codebase:
     convolution_simulation runs once per MCMC iteration, so the resim null evaluates it millions
-    of times per chromosome. The pandas MultiIndex .loc lookup costs ~92 us -- more than the
-    np.convolve it precedes on the mid and large length scales -- and the caller used to do it
-    twice, once per bound. Caching returns the identical values, so results are bit-identical;
-    it is only valid because TELOMERES_OBSERVED is loaded once at import and never mutated.
+    of times per chromosome.
     """
     row = TELOMERES_OBSERVED.loc[cur_chrom, cur_length_scale]
     return row['chrom_start'], row['chrom_end']

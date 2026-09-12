@@ -18,8 +18,7 @@ This module replaces that with three rules:
    reproducible; `derive_seed` also makes results independent of batching/ordering, so the pipeline
    can scatter samples into chunks without changing per-sample results.
 
-Two things this cannot fix, documented rather than silently half-solved:
-
+One thing this cannot fix:
 * **Wall-clock limits.** `time_limit_all_solutions` / `time_limit_mcmc` / CP-SAT's
   `max_time_in_seconds` make the answer depend on machine speed and load -- leave them unset for
   reproducible runs.
