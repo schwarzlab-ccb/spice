@@ -310,8 +310,10 @@ def create_observed_centromeres_and_telomeres(final_events_df, segment_size_dict
     The configured plateau, chromosome and duplicate filters are applied together
     with static centromere classification, 5 Mb padding exclusion and width limits.
     Observed-centromere refinement is disabled because these tables are its input.
-    Filtered internal events are pooled across scales; centromere coordinates are
-    rounded to each scale's segment size.
+    Each scale uses only its filtered events with lower < width <= upper, matching
+    detection. Centromere coordinates are rounded to that scale's segment size.
+    Missing arms use static centromere boundaries; a scale with no events uses
+    static assembly bounds and logs a warning (it has no signal to fit).
     """
     from spice.loci_preprocessing import process_final_events_for_loci_routines
     import spice
@@ -329,13 +331,24 @@ def create_observed_centromeres_and_telomeres(final_events_df, segment_size_dict
         raise ValueError('No internal events remain after filtering for observed tables')
     chroms = [c for c in CHROMS if c in set(final_events_df['chrom'])]
     centromeres = load_centromeres(extended=False)
+    chrom_lengths = load_chrom_lengths()
 
     actual_centro_pos = pd.DataFrame(index=chroms, columns=pd.MultiIndex.from_product([['small', 'mid1', 'mid2', 'large'], ['centro_start', 'centro_end']]))
     actual_telomere_pos = pd.DataFrame(index=chroms, columns=pd.MultiIndex.from_product([['small', 'mid1', 'mid2', 'large'], ['chrom_start', 'chrom_end']]))
     for cur_chrom in tqdm(chroms):
         for cur_length_scale in ['small', 'mid1', 'mid2', 'large']:
 
-            cur_events = final_events_df.query('pos == "internal" and chrom == @cur_chrom').copy()
+            lower, upper = length_scale_boundaries[cur_length_scale]
+            cur_events = final_events_df.query(
+                'pos == "internal" and chrom == @cur_chrom and width > @lower and width <= @upper')
+            if cur_events.empty:
+                logger.warning(f'No filtered events for {cur_chrom}, {cur_length_scale}; '
+                               'using static assembly bounds for this empty scale')
+                actual_centro_pos.loc[cur_chrom, cur_length_scale] = centromeres.loc[cur_chrom].values
+                if cur_chrom in ['chr13', 'chr14', 'chr15', 'chr21', 'chr22']:
+                    actual_centro_pos.loc[cur_chrom, (cur_length_scale, 'centro_start')] = 0
+                actual_telomere_pos.loc[cur_chrom, cur_length_scale] = [0, chrom_lengths.loc[cur_chrom]]
+                continue
             centro_center = centromeres.loc[cur_chrom].mean()
 
             if centromeres.loc[cur_chrom, 'centro_start'] == 0 or cur_chrom in ['chr13', 'chr14', 'chr15', 'chr21', 'chr22']:

@@ -84,3 +84,52 @@ def test_generation_handles_arm_without_filtered_events(tmp_path, monkeypatch):
     cen, tel = read_tables(tmp_path / 'data_loaders')
     assert not cen.isna().any().any()
     assert tuple(tel.loc['chr1', 'small']) == (80_000_000, 80_500_000)
+
+
+def test_each_scale_measures_its_own_events(tmp_path, monkeypatch):
+    coordinates = [(40_000_000, 40_500_000), (200_000_000, 200_500_000),
+                   (60_000_000, 62_000_000), (180_000_000, 182_000_000),
+                   (80_000_000, 85_000_000), (170_000_000, 175_000_000),
+                   (90_000_000, 110_000_000), (150_000_000, 170_000_000)]
+    rows = []
+    for i, (start, end) in enumerate(coordinates):
+        row = raw_events().iloc[0].to_dict()
+        row.update(id=f'event{i}', sample=f's{i}', start=start, end=end, width=end-start)
+        rows.append(row)
+    monkeypatch.setitem(spice.config, 'input_files', {})
+    monkeypatch.setitem(spice.directories, 'results_dir', str(tmp_path))
+    data_loaders.create_observed_centromeres_and_telomeres(pd.DataFrame(rows))
+    cen, tel = read_tables(tmp_path / 'data_loaders')
+    for i, scale in enumerate(['small', 'mid1', 'mid2', 'large']):
+        left, right = coordinates[2*i:2*i+2]
+        assert tuple(cen.loc['chr1', scale]) == (left[1], right[0])
+        assert tuple(tel.loc['chr1', scale]) == (left[0], right[1])
+
+
+def test_scale_boundaries_match_detection_and_empty_scales_use_reference(tmp_path, monkeypatch):
+    rows = []
+    for i, (start, width) in enumerate([(20_000_000, 100_000), (40_000_000, 1_000_000),
+                                      (60_000_000, 2_500_000), (80_000_000, 10_000_000)]):
+        row = raw_events().iloc[0].to_dict()
+        row.update(id=f'event{i}', sample=f's{i}', start=start, end=start+width, width=width)
+        rows.append(row)
+    monkeypatch.setitem(spice.config, 'input_files', {})
+    monkeypatch.setitem(spice.directories, 'results_dir', str(tmp_path))
+    data_loaders.create_observed_centromeres_and_telomeres(pd.DataFrame(rows))
+    cen, tel = read_tables(tmp_path / 'data_loaders')
+    assert tuple(tel.loc['chr1', 'small']) == (40_000_000, 41_000_000)
+    assert tuple(tel.loc['chr1', 'mid1']) == (60_000_000, 62_500_000)
+    assert tuple(tel.loc['chr1', 'mid2']) == (80_000_000, 90_000_000)
+    assert tuple(tel.loc['chr1', 'large']) == (0, 249250621)
+    assert tuple(cen.loc['chr1', 'large']) == (121500000, 128900000)
+
+
+def test_empty_acrocentric_scale_keeps_short_arm_excluded(tmp_path, monkeypatch):
+    event = raw_events().iloc[[0]].copy()
+    event['chrom'] = 'chr15'
+    event['chrom_length'] = 102531392
+    monkeypatch.setitem(spice.config, 'input_files', {})
+    monkeypatch.setitem(spice.directories, 'results_dir', str(tmp_path))
+    data_loaders.create_observed_centromeres_and_telomeres(event)
+    cen, _ = read_tables(tmp_path / 'data_loaders')
+    assert tuple(cen.loc['chr15', 'large']) == (0, 20700000)
