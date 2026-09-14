@@ -22,7 +22,7 @@ params:
   # Thresholds for number of events
   dist_limit: 40 # Maximum number of events to consider
   full_path_dist_limit: 9 # Above this number of events, do not attempt full path finding
-  full_path_high_mem_dist_limit: 8 # Needed for cluster execution using Snakemake
+  full_path_high_mem_dist_limit: 8
   # Function parameters
   use_cache: True
   sv_size_filter: 1000
@@ -41,11 +41,6 @@ params:
   time_limit_all_solutions: null
   time_limit_mcmc: null
   skip_loh_check_for_large_chroms: True # Whether to skip LOH checks for large chromosomes when MCMC solving times out (can lead to inaccurate results, but might be necessary for large chromosomes)
-  # Cluster parameters for Snakemake
-  knn_mem: 16000
-  full_path_mem: 16000
-  full_path_mem_large: 64000
-  full_path_disk: 16000 # needed for caching of paths
 
 loci_detection:
   # De-novo loci detection parameters

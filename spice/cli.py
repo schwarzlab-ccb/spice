@@ -3,9 +3,7 @@
 
 import glob
 import os
-import sys
 import argparse
-import subprocess
 import re
 
 # Import base package only; defer submodule imports until after config is loaded
@@ -55,91 +53,6 @@ def main_event_inference(args):
     invalid_steps = [step for step in which if step not in valid_steps]
     if invalid_steps:
         raise ValueError(f"Invalid step(s): {', '.join(invalid_steps)}. Valid steps are: preprocessing, split, all_solutions, disambiguate, large_chroms, combine")
-
-    # Handle unlock early to avoid expensive imports
-    if args.unlock:
-        spice.set_config(args.config_path)
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        snakefile = os.path.join(repo_root, 'Snakefile_event_inference')
-        if not os.path.exists(snakefile):
-            raise FileNotFoundError(f"Snakefile_event_inference not found at {snakefile}")
-
-        cmd = [
-            'snakemake',
-            '-s', snakefile,
-            '--configfile', args.config_path,
-            '--unlock'
-        ]
-
-        env = os.environ.copy()
-        env['SPICE_CONFIG'] = os.path.abspath(args.config_path)
-        
-        print(f"Unlocking Snakemake working directory with config: {args.config_path}")
-        result = subprocess.run(cmd, env=env)
-        
-        if result.returncode == 0:
-            print("Successfully unlocked Snakemake working directory.")
-        else:
-            print(f"Unlock failed with return code {result.returncode}")
-            sys.exit(result.returncode)
-        
-        return
-
-    # Handle snakemake mode early to avoid expensive imports
-    if args.snakemake:
-        spice.set_config(args.config_path)
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        snakefile = os.path.join(repo_root, 'Snakefile_event_inference')
-        if not os.path.exists(snakefile):
-            raise FileNotFoundError(f"Snakefile_event_inference not found at {snakefile}")
-
-        if not args.run_preprocessing:
-            spice.load_config(args.config_path)
-            from spice import config
-            import shutil
-
-            name = config.get('name')
-            if not name:
-                raise ValueError("Config file must specify a 'name' field.")
-            data_dir = config['directories']['data_dir']
-            src = config['input_files']['copynumber']
-            dst = os.path.join(data_dir, f"{name}_processed.tsv")
-            os.makedirs(data_dir, exist_ok=True)
-
-            if not os.path.isabs(src):
-                src = os.path.join(config['directories']['base_dir'], src)
-
-            if not os.path.exists(dst):
-                print(f"--run-preprocessing not set. Copying {src} -> {dst}")
-                shutil.copyfile(src, dst)
-            else:
-                print(f"--run-preprocessing not set. Using existing {dst}")
-
-        cmd = [
-            'snakemake',
-            '-s', snakefile,
-            '--rerun-triggers', 'mtime',
-            '--verbose',
-            '--configfile', args.config_path,
-            '--config', f'config_path={args.config_path}',
-            '--keep-going'
-        ]
-        
-        # Pass run_preprocessing to snakemake if set
-        if args.run_preprocessing:
-            cmd.extend(['--config', 'run_preprocessing=True'])
-        
-        # add execution mode and number of jobs/cores
-        if args.snakemake_mode == 'slurm':
-            cmd.extend(['--slurm', '-j', str(args.snakemake_jobs)])
-        else:
-            # Local mode: explicitly disable profiles and cluster submission
-            cmd.extend(['--profile', '', '--cores', str(args.snakemake_cores)])
-
-        env = os.environ.copy()
-        env['SPICE_CONFIG'] = os.path.abspath(args.config_path)
-        subprocess.run(cmd, check=True, env=env)
-        return
 
     # Load configuration before importing submodules that may read it
     spice.load_config(args.config_path)
@@ -224,10 +137,8 @@ def main_event_inference(args):
         logger.warning(f"Large number of input samples detected (N={n_samples}).")
         logger.warning("")
         logger.warning("SPICE can be very slow when processing many samples in serial mode.")
-        logger.warning("For large datasets, we strongly recommend using the Snakemake workflow")
-        logger.warning("for parallel execution on a cluster.")
-        logger.warning("")
-        logger.warning("See README section 'Using with Snakemake' for more information:")
+        logger.warning("For large datasets, consider using --cores to parallelize, or splitting")
+        logger.warning("the run across --ids batches on a cluster.")
         logger.warning("=" * 80)
 
     total_cn = config['params'].get('total_cn', False)
@@ -833,36 +744,8 @@ def main_loci_detection(args):
     logger.info('Running SPICE: Loci Detection Mode (De-Novo)')
     logger.info(f'Project name: {config["name"]}')
     _apply_seed(args, logger)
-    
-    # Handle snakemake mode
-    if args.snakemake:
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        snakefile = os.path.join(repo_root, 'Snakefile_loci_detection')
-        if not os.path.exists(snakefile):
-            raise FileNotFoundError(f"Snakefile_loci_detection not found at {snakefile}")
 
-        cmd = [
-            'snakemake',
-            '-s', snakefile,
-            '--rerun-triggers', 'mtime',
-            '--verbose',
-            '--configfile', args.config_path,
-            '--config', f'config_path={args.config_path}',
-        ]
-        
-        # Add number of jobs/cores
-        if args.snakemake_mode == 'slurm':
-            cmd.extend(['--slurm', '-j', str(args.snakemake_jobs), '--keep-going'])
-        else:
-            cmd.extend(['-c', str(args.snakemake_cores)])
-
-        env = os.environ.copy()
-        env['SPICE_CONFIG'] = os.path.abspath(args.config_path)
-        logger.info(f'Running Snakemake loci detection workflow')
-        subprocess.run(cmd, check=True, env=env)
-        return
-    
-    # Non-Snakemake mode: Use the loci detection pipeline
+    # Use the loci detection pipeline
     from spice.main_loci_functions import run_loci_detection_per_chrom, process_final_events_for_loci_routines
     from spice.data_loaders import load_final_events
     from spice.tsg_og import permutation
@@ -1112,15 +995,6 @@ def main_loci_assignment(args):
 
 def main():
     """Main CLI entry point for SPICE."""
-    # Allow `spice --config <path> --snakemake` (default to event_inference mode)
-    if '--snakemake' in sys.argv:
-        raise NotImplementedError("Snakemake usage is coming soon!")
-    if '--snakemake' in sys.argv and not any(
-        mode in sys.argv for mode in ['event_inference', 'plotting', 'loci_detection']
-    ):
-        raise ValueError("When using --snakemake, you must also specify a mode: event_inference, plotting, or loci_detection.")
-        
-
     parser = argparse.ArgumentParser(
         description='SPICE: Selection Patterns In somatic Copy-number Events',
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -1240,34 +1114,6 @@ Examples:
         action='store_true',
         help='Preprocessing: skip centromere binning'
     )
-    parser_event.add_argument(
-        '--snakemake',
-        action='store_true',
-        help='Run the event inference workflow using Snakemake instead of the Python runner'
-    )
-    parser_event.add_argument(
-        '--snakemake-mode',
-        choices=['local', 'slurm'],
-        default='local',
-        help='Snakemake execution mode: local or slurm (default: local)'
-    )
-    parser_event.add_argument(
-        '--snakemake-jobs',
-        type=int,
-        default=250,
-        help='Number of jobs for Snakemake on Slurm (-j, default: 250)'
-    )
-    parser_event.add_argument(
-        '--snakemake-cores',
-        type=int,
-        default=1,
-        help='Number of cores for local Snakemake execution (-c, default: 1)'
-    )
-    parser_event.add_argument(
-        '--unlock',
-        action='store_true',
-        help='Unlock the Snakemake working directory and exit'
-    )
     parser_event.set_defaults(func=main_event_inference)
     
     # ===== PLOTTING SUBPARSER =====
@@ -1343,29 +1189,6 @@ Examples:
         '--overwrite',
         action='store_true',
         help='Run new and overwrite existing data'
-    )
-    parser_loci.add_argument(
-        '--snakemake',
-        action='store_true',
-        help='Run the loci detection workflow using Snakemake'
-    )
-    parser_loci.add_argument(
-        '--snakemake-mode',
-        choices=['local', 'slurm'],
-        default='local',
-        help='Snakemake execution mode: local or slurm (default: local)'
-    )
-    parser_loci.add_argument(
-        '--snakemake-jobs',
-        type=int,
-        default=250,
-        help='Number of jobs for Snakemake on Slurm (-j, default: 250)'
-    )
-    parser_loci.add_argument(
-        '--snakemake-cores',
-        type=int,
-        default=1,
-        help='Number of cores for local Snakemake execution (-c, default: 1)'
     )
     parser_loci.add_argument(
         '--chrom',

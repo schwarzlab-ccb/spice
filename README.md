@@ -314,21 +314,7 @@ We usually recommend to only use multiple cores for the `large_chroms` pipeline 
 
 Note that parallel processing will disable logging for the different subprocesses.
 
-### 3.6 Snakemake Execution
-
-For parallel execution on computing clusters, use the Snakemake workflow.
-
-**Note:** Snakemake must be installed separately:
-```bash
-conda install bioconda::snakemake
-```
-
-**Coming soon, not fully implemented yet**
-
-
-**Note:** If you get a `LockException` run `spice --config configs/events_example.yaml --unlock` to remove the lock.
-
-### 3.7 Logging Output
+### 3.6 Logging Output
 
 Control where logging output is sent with the `--log` flag:
 

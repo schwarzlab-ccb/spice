@@ -119,7 +119,6 @@ def test_scatter_invalidates_tables_before_refitting(permutation_run, monkeypatc
 def test_combine_builds_null_with_complete_detection_steps(permutation_run, monkeypatch,
                                                          configured, overwrite):
     args, cfg, root, events = permutation_run
-    args.snakemake = False
     args.loci_steps = ['combine']
     args.overwrite = overwrite
     cfg['loci_detection']['loci_steps'] = configured
