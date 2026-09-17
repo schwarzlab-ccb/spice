@@ -91,6 +91,40 @@ For other parameters that can be modified, see `default_config.yaml`.
    - If relative, SPICE resolves them against `directories.base_dir`.
    - If absolute, SPICE uses them as-is.
 
+### 1.3 Reproducibility (`params.seed`)
+
+Every SPICE step is stochastic (MCMC over event orders, resimulated nulls, bootstrap resampling,
+randomised tie-breaks). All of it derives from a single base seed, `params.seed` (default 42),
+overridable per command with `--seed`; the seed in use is written to the log at startup. Re-running
+the same command on the same input with the same seed reproduces the results; change the seed to get
+an independent replicate.
+
+The seed is threaded through parallel work as well, so results do not depend on `--cores`: each task
+(a sample, a chromosome, a bootstrap iteration, a resimulation) gets its own stream keyed on *what
+it is* rather than on when it ran. Detecting loci on `chr7` alone therefore gives the same answer as
+detecting it as part of a whole-genome run, which is what makes scattering the work over a cluster
+safe. See `spice/random_state.py` for the mechanism.
+
+`spice permute` uses the same base seed as loci detection. `--index` selects a permutation
+under that seed; it does not replace `--seed`. Use the same config and base seed for every
+scattered unit and the pooling command:
+
+```bash
+spice permute --config cohort_loci.yaml --seed 7 --index 3 --chrom chr7
+spice permute --config cohort_loci.yaml --seed 7 --pool
+```
+
+Run all required `(index, chromosome)` units before pooling. Omit `--seed` to use `params.seed`.
+Rerunning a permutation unit invalidates its combined table and the pooled null. Pool again
+once all units finish. `spice permute --config <config> --pool --overwrite` also forces
+recombination of existing per-chromosome results, without rerunning detection.
+
+Loci preprocessing and each fitting stage use separate random streams. With the same
+inputs, parameters, and seed, rebuilding a stage gives the same result whether preceding
+stages were computed, cached, or loaded during a resumed run. When changing the seed,
+inputs, or parameters, use a new run name/directory so earlier caches are not reused.
+
+One thing falls outside the seed: **Wall-clock limits.** `params.time_limit_all_solutions` / `time_limit_mcmc` (and CP-SAT's internal time limit) make the result depend on machine speed and load. Leave them unset for
 
 ## 2. Usage Overview
 
@@ -158,8 +192,8 @@ SPICE expects tab-separated input files with copy-number segments. See example f
 - `cn_b`: Copy number for allele B (haplotype-specific)
 
 **Optional files:**
-- `wgd_status`: TSV with WGD status per sample (see section 1.3)
-- `xy_status`: TSV with sex status per sample (see section 1.4)
+- `wgd_status`: TSV with WGD status per sample (see section 3.2.2)
+- `xy_status`: TSV with sex status per sample (see section 3.2.3)
 - `sv`: Pickle file (`.pickle`) with SV calls used for SV-constrained event matching (see section 3.2.4)
 
 Total copy-number mode can be enabled by setting `params.total_cn: True` in the config file.
@@ -258,7 +292,7 @@ The preprocessing step runs only when `--run-preprocessing` is provided and prep
 
 - Data normalization: ensures chromosome names use `chr` prefix; converts starts/ends to integers and adjusts starts to 0-based.
 - CN capping and filtering: caps copy numbers at 8; removes segments shorter than 1kb.
-- WGD resolution: loads from `wgd_status.tsv` or infers as described in section 1.3.
+- WGD resolution: loads from `wgd_status.tsv` or infers as described in section 3.2.2.
 - Sex resolution: loads from `xy_status.tsv` or infers by presence of `chrY`; for XY samples with haplotype-specific CN, sets minor CN of `chrX` and `chrY` to 0.
 - Neighbor merging: merges adjacent segments with identical CNs to reduce fragmentation.
 - Telomeres and centromeres: fills telomeric regions and optionally bins/unifies centromeres (can be skipped with `--pre-skip-centromeres`).
@@ -280,21 +314,7 @@ We usually recommend to only use multiple cores for the `large_chroms` pipeline 
 
 Note that parallel processing will disable logging for the different subprocesses.
 
-### 3.6 Snakemake Execution
-
-For parallel execution on computing clusters, use the Snakemake workflow.
-
-**Note:** Snakemake must be installed separately:
-```bash
-conda install bioconda::snakemake
-```
-
-**Coming soon, not fully implemented yet**
-
-
-**Note:** If you get a `LockException` run `spice --config configs/events_example.yaml --unlock` to remove the lock.
-
-### 3.7 Logging Output
+### 3.6 Logging Output
 
 Control where logging output is sent with the `--log` flag:
 
@@ -319,7 +339,58 @@ Coming soon!
 ### 4.2 Expected Input
 
 Loci detection requires:
-- **Event inference results**: `final_events.tsv` produced by the event_inference pipeline
+
+- **Event inference results**: `final_events.tsv` produced by the event-inference pipeline.
+- **Observed centromere and telomere tables**: set `input_files.centromeres_observed` and
+  `input_files.telomeres_observed` to tables derived from that same cohort. These are
+  cohort measurements, not interchangeable assembly reference files. Use the same pair
+  for observed detection, permutations, pooling, assignment, and loci plotting.
+  Generate them with `data_loaders.create_observed_centromeres_and_telomeres(final_events_df)`
+  after loading the cohort's loci config. The generator applies the loci event filters,
+  including static centromere classification, the 5 Mb padding exclusion, width limits,
+  duplicates and configured plateau filtering. Observed-centromere refinement is skipped
+  during construction to avoid a circular dependency. Each length scale uses its own
+  filtered events (`lower < width <= upper`, matching detection), with centromere
+  coordinates rounded to that scale's segment size. Missing arms use static centromere
+  boundaries; an entirely empty scale uses static assembly bounds with a warning.
+  Tables previously generated by pooling scales must also be regenerated.
+  Tables generated previously from raw events must be regenerated, followed by the observed
+  loci fits and all permutation units; cached results from the old boundaries cannot be reused.
+
+For example, add these paths to your `cohort_loci.yaml` (relative paths use `directories.base_dir`):
+
+```yaml
+input_files:
+  final_events: data/final_events.tsv
+  centromeres_observed: data/centromeres_observed.tsv
+  telomeres_observed: data/telomeres_observed.tsv
+```
+
+The default permutation mode, `rotate`, applies a shared circular offset to internal
+events within each sample/chromosome/arm. It chooses a cut uniformly from integer
+positions in gaps or at event boundaries, preserving widths, overlaps, and circular
+spacing without splitting events. Dense groups have fewer legal cuts; an arm-spanning
+event prevents its group from moving. `uniform` instead places events independently
+within their arms. Events outside the observed arm bounds remain fixed.
+
+The default fitness p-value strategy, `zpool`, standardizes null loci within each
+chromosome, direction, and arm before pooling them. When either arm has fewer than 20
+null loci, both arms use their combined chromosome/direction stratum. This includes
+arms with zero null loci, and each null locus enters the pooled reference once.
+
+To combine previously detected chromosomes, use
+`spice loci_detection --config <config> --loci-steps combine`. If no pooled permutation
+null exists, SPICE builds one using the complete `loci_detection.loci_steps` recipe
+from the config (`fast`, `full`, or a complete stage list). Keep that recipe in the
+config and select combine-only or resume stages on the command line. `--overwrite`
+also rebuilds an existing null; for large cohorts, build it with scattered `spice permute`
+commands before combining.
+
+After upgrading from earlier `p-explore` results, use a new run name/directory and
+regenerate observed fits and every permutation unit. Previous caches and null tables
+encode the old RNG and rotation behavior; re-pooling those fits does not update them.
+The revised rotation and arm fallback change p/q values, so previous calibration and
+power measurements need to be rerun before being applied to these results.
 
 ### 4.3 Expected Output
 
@@ -375,7 +446,8 @@ spice plotting --config <path/to/config> --plot-events-per-id <sample:chr:allele
 ```
 
 **Requirements:**
-- Plotting requires `final_events.tsv`.
+- Event plotting uses the event-inference config and `final_events.tsv`; cohort observed-centromere
+  and observed-telomere tables are not required.
 - Output PNGs are saved to `plot_dir/{name}/` (see `directories.plot_dir` in config; defaults to `plots/`).
 - `--plot-unit-size` switches per-sample plots to unit-size segments.
 
@@ -396,6 +468,8 @@ spice plotting --config <path/to/config> --plot-single-locus 3 --loci-mode detec
 
 **Requirements:**
 - Plotting requires `final_loci_detection.tsv` or `final_loci_assignment.tsv`.
+- Use the same `input_files.centromeres_observed` and `input_files.telomeres_observed`
+  tables used for detection or assignment.
 - Output PNGs are saved to `plot_dir/{name}/` (see `directories.plot_dir` in config; defaults to `plots/`).
 
 For interactive exploration, see `notebooks/loci_plotting.ipynb`.

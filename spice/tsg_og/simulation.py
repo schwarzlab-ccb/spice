@@ -1,6 +1,7 @@
 import os
 from collections import namedtuple
 from copy import copy, deepcopy
+from functools import lru_cache
 import pickle
 from joblib import Parallel, delayed
 
@@ -9,6 +10,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
+from spice.random_state import np_rng, seed_task, spawn_seeds
 from spice.utils import get_logger, open_pickle, save_pickle, CALC_NEW
 from spice.length_scales import DEFAULT_SEGMENT_SIZE_DICT
 from spice import data_loaders, directories, config
@@ -151,7 +153,7 @@ class SelectionPoints:
         combined = self.loci + self.plateaus
         assert len(combined) > 0, "No entries in the selection points"
         
-        index = np.random.randint(0, len(combined)) if len(combined) > 1 else 0
+        index = np_rng().randint(0, len(combined)) if len(combined) > 1 else 0
         entry = combined[index]
 
         return index, entry
@@ -163,7 +165,7 @@ def resimulate_events(cur_widths, selection_points=None, chrom_size=None, baseli
     
     assert selection_points is not None or baseline_fitness > 0, 'Either genes with fitness values or a baseline fitness value > 0 is needed'
     if seed is not None:
-        np.random.seed(seed)
+        seed_task(seed)
     if chrom_size is None:
         chrom_size = CHROM_LENS.loc[cur_chrom]
 
@@ -189,7 +191,7 @@ def resimulate_events(cur_widths, selection_points=None, chrom_size=None, baseli
             chrom_start = centro_end
 
     chrom_size_real = chrom_end - chrom_start
-    cur_starts = chrom_start + np.random.uniform(0, 1, (len(cur_widths), n_random_values)) * (chrom_size_real - cur_widths)[:, None]
+    cur_starts = chrom_start + np_rng().uniform(0, 1, (len(cur_widths), n_random_values)) * (chrom_size_real - cur_widths)[:, None]
     cur_ends = cur_starts + cur_widths[:, None]
 
     event_fitness = np.ones_like(cur_starts) * baseline_fitness
@@ -213,7 +215,7 @@ def resimulate_events(cur_widths, selection_points=None, chrom_size=None, baseli
     event_fitness = event_fitness / (event_fitness.sum(axis=1, keepdims=True) + 1e-9)
 
     # Inverse transform sampling
-    random_values = np.random.rand(len(event_fitness))[:, None]
+    random_values = np_rng().rand(len(event_fitness))[:, None]
     cumulative_probs = np.cumsum(event_fitness, axis=1)
     selected_events_indices = (random_values < cumulative_probs).argmax(axis=1)
 
@@ -258,8 +260,15 @@ def resimulate_events_multiple(cur_chrom, data_per_length_scale, final_selection
     if final_selection_points is None:
         final_selection_points = 8 * [[SelectionPoints()]]
 
+    # One stream per sim, drawn from the caller's stream. Both halves matter: the workers are
+    # separate processes whose RNG would otherwise start from OS entropy (unreproducible), and this
+    # function is called many times per run (bootstrap, resim nulls), so the sims must still differ
+    # between calls -- which a seed derived from `sim_index` alone would not do.
+    sim_seeds = spawn_seeds(N_sims)
+
     def simulate_single_sim(sim_index):
         """Simulate a single iteration across all length scales."""
+        seed_task(sim_seeds[sim_index])
         return [
             resimulate_events(
                 data['cur_widths'], combine_selection_points(cur_sp), chrom_size=CHROM_LENS.loc[cur_chrom], baseline_fitness=1,
@@ -359,6 +368,18 @@ def create_height_multiplier(cur_widths, cur_chrom, cur_length_scale, cur_type, 
     return height_multiplier
 
 
+@lru_cache(maxsize=None)
+def _telomere_bounds(cur_chrom, cur_length_scale):
+    """Observed (chrom_start, chrom_end) for one (chromosome, length scale).
+
+    Memoised because it is a per-key constant that sits on the hottest path in the codebase:
+    convolution_simulation runs once per MCMC iteration, so the resim null evaluates it millions
+    of times per chromosome.
+    """
+    row = TELOMERES_OBSERVED.loc[cur_chrom, cur_length_scale]
+    return row['chrom_start'], row['chrom_end']
+
+
 def convolution_simulation(cur_widths, selection_points=None, chrom_size=None, cur_type=None, cur_chrom=None,
                         kernel=None, kernel_edge=None, baseline_fitness=1, legacy_height_multiplier=False,
                         height_multiplier=None, segment_size=100e3, return_None_if_zero=False,
@@ -376,8 +397,7 @@ def convolution_simulation(cur_widths, selection_points=None, chrom_size=None, c
             chrom_start = 0
             chrom_end = CHROM_LENS[cur_chrom]
         else:
-            chrom_start = TELOMERES_OBSERVED.loc[cur_chrom, cur_length_scale]['chrom_start']
-            chrom_end = TELOMERES_OBSERVED.loc[cur_chrom, cur_length_scale]['chrom_end']
+            chrom_start, chrom_end = _telomere_bounds(cur_chrom, cur_length_scale)
     chrom_left_pad = int(chrom_start//segment_size)
     chrom_right_pad = int((chrom_size - chrom_end)//segment_size)
 

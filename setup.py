@@ -36,7 +36,6 @@ setup(
         'importlib_resources>=5.0; python_version < "3.9"',
     ],
     extras_require={
-        'snakemake': ['snakemake>=7.0'],
         'preprocessing': ['CNSistent'],
     },
     python_requires='>=3.8',

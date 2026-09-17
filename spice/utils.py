@@ -56,8 +56,7 @@ class CALC_NEW:
         self.filename = filename
         self.force_new = force_new
         self.logger = get_logger('CALC_NEW')
-        if not verbose:
-            self.logger.setLevel(logging.WARNING)
+        self.logger.setLevel(logging.DEBUG if verbose else logging.WARNING)
 
 
     def __call__(self, func):

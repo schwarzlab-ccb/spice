@@ -5,6 +5,12 @@ directories:
   plot_dir: 'plots'
 
 params:
+  # Base RNG seed. Every random draw in SPICE derives from it (see spice/random_state.py), so the
+  # Overridable per command with --seed
+  seed: 42
+  # Reference assembly for the packaged coordinate tables (chromosome lengths, centromeres, and the
+  # observed centromere/telomere positions). 'hg19' or 'hg38'.
+  assembly: 'hg19'
   # Logging
   logging_level: "INFO"
   # Input data
@@ -16,7 +22,7 @@ params:
   # Thresholds for number of events
   dist_limit: 40 # Maximum number of events to consider
   full_path_dist_limit: 9 # Above this number of events, do not attempt full path finding
-  full_path_high_mem_dist_limit: 8 # Needed for cluster execution using Snakemake
+  full_path_high_mem_dist_limit: 8
   # Function parameters
   use_cache: True
   sv_size_filter: 1000
@@ -26,20 +32,21 @@ params:
   mcmc_max_T: -6
   mcmc_min_T: 1
   mcmc_n_iterations_scale: 200
+  # Runaway ceilings for the large_chroms MCMC. Both default to None (off)..
+  # mcmc_max_iterations: refuse a unit whose derived budget (n_events * mcmc_n_iterations_scale) exceeds this.
+  # mcmc_loh_solve_time_limit: seconds per CP-SAT solve in the proposal-time LOH filters, which are otherwise UNBOUNDED
+  mcmc_max_iterations: null
+  mcmc_loh_solve_time_limit: null
   # Time limits (in seconds, per chromosome)
-  time_limit_all_solutions: None
-  time_limit_mcmc: None
+  time_limit_all_solutions: null
+  time_limit_mcmc: null
   skip_loh_check_for_large_chroms: True # Whether to skip LOH checks for large chromosomes when MCMC solving times out (can lead to inaccurate results, but might be necessary for large chromosomes)
-  # Cluster parameters for Snakemake
-  knn_mem: 16000
-  full_path_mem: 16000
-  full_path_mem_large: 64000
-  full_path_disk: 16000 # needed for caching of paths
 
 loci_detection:
   # De-novo loci detection parameters
   loci_steps: 'fast' # Steps to run: 'full', 'fast', combine, single step, or space-separated steps
-  N_loci: 100 # Number of loci to detect
+  N_loci: 100 # Number of loci to detect per chromosome (flat; ignored when N_loci_spacing is set)
+  N_loci_spacing: null # If set, seed one locus per this many bp of searchable sequence
   skip_up_down: False # Skip up/down assignment
   use_original_rank: False # Use original rank from detection instead of re-ranking
   N_bootstrap: 10 # Number of bootstrap samples for signal bootstrap
@@ -62,16 +69,16 @@ loci_detection:
   final_limiting_N_iterations_optim: 100 # Number of iterations for final limiting optimization
   N_bootstrap_for_widths: 10 # How many bootstrap iterations are used for inferring locus widths (needs to be <= N_bootstrap)
   th_locus_prominence: 10 # Threshold for locus prominence filtering
+  th_locus_mean_fitness: 1 # Threshold for the mean directed fitness post-processing filter, applied alongside locus prominence filtering
   # Loci assignment
   loci_assignment_N_iterations: 250 # Number of iterations for loci assignment optimization
   loci_assignment_within_ci_N_iterations: 100 # Number of iterations for within ci filtering
   # Loci combination and scoring parameters
-  p_values_N_random: 1000 # Number of random samples for p-value calculation
-  p_values_N_iterations: 1000 # Number of optimization iterations for p-value calculations
-  calculate_p_value: True # Whether to calculate p-values from scratch (if False, load from cache)
+  calculate_p_value: True # Whether to assign the fitness p-value at all
   p_value_threshold: 0.05 # Loci with q_value (BH-FDR fitness p) >= this are dropped from the output
-  p_values_mode: 'top' # How resimulation loci are chosen for p-value calculation ('random' or 'top')
-  p_values_optimize_ls_separately: False # Only used when p_values_mode='top'. If True, each length scale gets its own top-residual position and is optimized separately, instead of jointly optimizing one shared position
+  p_values_K: 16 # Permutations. The empirical p floors at 1/(pooled+1) and that floor binds the FDR (BH gives a tied block q = n*p/k), so do NOT lower this to save time
+  p_values_strategy: 'zpool' # Standardize within chromosome/direction/arm; pool both arms if either has fewer than 20 null loci. Include the scored locus in its own calibration. Alternatives: zpool_chrom, pooled, perchrom.
+  p_values_permute_mode: 'rotate' # 'rotate' uses a shared circular offset per sample/chrom/arm, cutting outside event interiors to preserve widths, overlaps and circular spacing; 'uniform' places events independently
   # Event preprocessing parameters
   remove_plateaus: True # Remove events overlapping copy-number plateaus
   remove_chrY: True # Remove chrY events from analysis

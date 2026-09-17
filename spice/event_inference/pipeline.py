@@ -15,8 +15,9 @@ from spice.logging import get_logger, log_debug
 from spice.event_inference.events_from_graph import (
     full_paths_from_graph_with_sv, create_events_df_from_single_path_solution)
 from spice.event_inference.knn_graph import solve_with_knn, load_knn_train
-from spice.event_inference.mcmc_for_large_chroms import mcmc_event_selection, create_best_events_df_from_mcmc
-from spice.event_inference.data_structures import ChromData
+from spice.event_inference.mcmc_for_large_chroms import (mcmc_event_selection, create_best_events_df_from_mcmc,
+                                                        set_loh_solve_time_limit)
+from spice.event_inference.data_structures import ChromData, McmcGuardExceeded
 from spice.pipeline_postprocessing import calc_summary_from_events_df
 from spice.event_analysis.final_events import classify_event_position
 
@@ -105,7 +106,7 @@ def create_knn_train_data(output_file, knn_train_data_ext=None, full_paths_singl
             if not os.path.exists(cur_dir):
                 logger.warning(f'{cur_dir} does not exist, skipping')
                 continue
-            for cur_file in os.listdir(cur_dir):
+            for cur_file in sorted(os.listdir(cur_dir)):   # sorted: listdir order is filesystem order
                 if not cur_file.endswith('.pickle'):
                     continue
                 cur_events = open_pickle(os.path.join(cur_dir, cur_file), fail_if_nonexisting=True)
@@ -206,7 +207,7 @@ def solve_with_mcmc_wrapper(
         output_file=None, sv_matching_threshold=10, n_iterations=None, n_iteration_scale=100, perform_loh_checks=False,
         min_T=1, max_T=-6, swap_event_based_on_score=True, check_all_loh_solutions=False, total_cn=False,
         verbose=False, save_all_scores=None, log_progress=False, show_progress=False, fail_on_empty=True,
-        skip_loh_check=True):
+        skip_loh_check=True, max_iterations=None, loh_solve_time_limit=None):
     assert (n_iterations is not None) ^ (n_iteration_scale is not None), 'Either n_iterations or n_iteration_scale must be provided'
 
     chrom_data = open_pickle(chrom_file, fail_if_nonexisting=True)
@@ -219,6 +220,22 @@ def solve_with_mcmc_wrapper(
 
     if n_iterations is None:
         n_iterations = int(chrom_data.n_events * n_iteration_scale)
+
+    # --- runaway ceilings (both raise McmcGuardExceeded -> _run_batch -> failed_reports.tsv) -------
+    # 1. Iteration ceiling. n_iterations is derived as n_events * n_iteration_scale, so a
+    #    hyper-fragmented chromosome silently buys itself an enormous budget. Refuse it up front
+    #    instead of truncating: a clamped budget would return a worse optimum with no signal that it
+    #    had been cut short.
+    if max_iterations is not None and n_iterations > max_iterations:
+        raise McmcGuardExceeded(
+            f'{cur_id}: n_iterations={n_iterations:,} (n_events={chrom_data.n_events} * '
+            f'scale={n_iteration_scale}) exceeds the mcmc_max_iterations ceiling of {max_iterations:,}. '
+            f'Reporting this unit as failed rather than running an unbounded budget or silently '
+            f'truncating it.')
+
+    # 2. Per-solve CP-SAT ceiling for the proposal-time LOH filters. This is the one that catches a
+    #    trajectory wedged inside a single solve.
+    set_loh_solve_time_limit(loh_solve_time_limit)
 
     knn_train_data = load_knn_train()
 
@@ -313,7 +330,8 @@ def combine_final_events(solved_dirs, chrom_segments_file=None, sv_data=None,
         cur_dir_name = '/'.join(cur_dir.split('/')[-2:])
         log_debug(logger, f'Directory {cur_dir_i+1}/{len(solved_dirs)}: {cur_dir}')
         n_files = len(os.listdir(os.path.join(cur_dir)))
-        for i, cur_file in enumerate(os.listdir(os.path.join(cur_dir))):
+        # sorted for deterministic results
+        for i, cur_file in enumerate(sorted(os.listdir(os.path.join(cur_dir)))):
             if not cur_file.endswith('.pickle'):
                 continue
             log_debug(logger, f'Directory {cur_dir_i+1}/{len(solved_dirs)}, file {i+1}/{n_files} ({100*(i+1)/n_files:.2f}%): {cur_file} from {cur_dir_name}')

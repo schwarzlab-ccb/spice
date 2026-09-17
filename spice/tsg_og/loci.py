@@ -1,3 +1,4 @@
+import itertools
 import os
 from functools import reduce
 
@@ -16,7 +17,8 @@ from spice.length_scales import DEFAULT_SEGMENT_SIZE_DICT, LENGTH_SCALE_NAMES, L
 from spice.tsg_og.simulation import (
     convolution_simulation, SelectionPoints, combine_selection_points)
 from spice.tsg_og.event_rate_per_loci import calc_total_events_per_loci
-from spice.tsg_og.p_values import resim_null_for_chrom_type
+from spice.tsg_og.permutation import (
+    STRATEGIES, permutation_p)
 
 CENTROMERES = data_loaders.load_centromeres(extended=False, observed=False)
 CHROMS = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
@@ -95,7 +97,8 @@ def create_loci_df(all_selection_points, all_loci_widths=None, nr_stds_widths=2,
     loci_df['end'] = loci_df['pos'] + loci_df['width'] / 2
     loci_df[[f'fitness_{LS_I_DICT_REV[i][0]}_{LS_I_DICT_REV[i][1]}' for i in range(8)]] = np.concatenate([np.stack(
         [[ls[0].fitness for ls in locus] for locus in list(zip(*chrom_selection_points))])
-        for chrom_selection_points in all_selection_points.values()], axis=0)
+        for chrom_selection_points in all_selection_points.values()
+        if len(chrom_selection_points[0])], axis=0)
     loci_df['type'] = np.where((loci_df[[f'fitness_{LS_I_DICT_REV[i][0]}_{LS_I_DICT_REV[i][1]}'
                                             for i in range(0, 8, 2)]] > 0).any(axis=1), 'OG', 'TSG')
     loci_df = loci_df.sort_values(by=['chrom', 'pos']).reset_index(drop=True)
@@ -166,9 +169,22 @@ def overlap_with_gistic_biscut(loci_df, gistic_loci, biscut_loci):
 
 
 def calculate_events_per_loci_df(loci_df, all_selection_points=None, final_events_df=None, rates_and_events_per_loci=None):
+    """Add `added_events` and its per-(length scale, direction) decomposition.
+
+    `total_events_per_loci` is keyed by `(length_scale, direction)` -- the same eight combinations as
+    the `fitness_<ls>_<dir>` columns -- and `added_events` is their sum.
+    """
+    part_cols = [f'added_events_{ls}_{direction}'
+                 for ls, direction in itertools.product(LENGTH_SCALE_NAMES, ['gain', 'loss'])]
 
     loci_df['added_events'] = 0.
+    # Initialised up front so the schema is the same whether or not a chromosome contributes.
+    for col in part_cols:
+        loci_df[col] = 0.
     for cur_chrom in CHROMS[:-1]:
+        cur_index = loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom').index
+        if len(cur_index) == 0:
+            continue
         if rates_and_events_per_loci is not None:
             total_events_per_loci = rates_and_events_per_loci[cur_chrom][1]
         else:
@@ -184,8 +200,12 @@ def calculate_events_per_loci_df(loci_df, all_selection_points=None, final_event
         if len(cur_added_events) == 0:
             continue
         cur_added_events = np.sum(np.stack(cur_added_events), axis=0)
-        cur_index = loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom').index
         loci_df.loc[cur_index, 'added_events'] = cur_added_events
+        # Same alignment as the total above (loci ordered by rank_on_chrom, trailing element dropped).
+        # A key whose event rate was zero is an int rather than an array, and its column stays 0.
+        for (ls, direction), value in total_events_per_loci.items():
+            if not isinstance(value, int):
+                loci_df.loc[cur_index, f'added_events_{ls}_{direction}'] = value[:-1]
 
     return loci_df
 
@@ -461,69 +481,38 @@ def calc_overlap_pairs(loci_1, loci_2):
     return np.array(cur_pairs)
 
 
-def assign_p_values(
-    loci_df,
-    N_random=10_000,
-    n_iterations_optim=1_000,
-    output_dir=None,
-    data_per_length_scale=None,
-    overwrite=False,
-    mode='random',
-    optimize_ls_separately=False,
-    n_jobs=1,
-):
-    """Assign the FITNESS p-value to loci, loading the resim null from cache or computing it.
+def assign_p_values(loci_df, null_df, strategy='zpool'):
+    """Assign the FITNESS p-value to loci from the POSITIONAL-PERMUTATION null.
 
-    The tested statistic is the mean optimized fitness over the four same-direction length scales
-    (monotone in selection strength). Writes the raw (pre-FDR) p as `p_value_raw` and its BH-FDR
-    value as `p_value`, plus the per-length-scale raw/`p_value_raw_<ls>` and BH-FDR/`p_value_<ls>`
-    (the per-scale FDR is applied jointly across all scales).
+    The tested statistic is the mean optimized fitness over the four same-direction length scales.
+    `null_df` is the pooled null written by `spice permute` (see spice.tsg_og.permutation): one row
+    per locus that detection found on a positionally-permuted copy of the cohort, so null and
+    observed loci come out of the identical detection cascade.
+
+    Writes the raw (pre-FDR) p as `p_value_raw` and its BH-FDR value as `p_value`, plus the
+    per-length-scale `p_value_raw_<ls>` and BH-FDR `p_value_<ls>` (the per-scale FDR applied jointly
+    across all scales).
 
     Args:
-        loci_df: DataFrame with loci to assign p-values to
-        N_random: Number of random simulations for p-value calculation
-        n_iterations_optim: Number of optimization iterations
-        output_dir: Directory to cache/load p-value results
-        data_per_length_scale: Data per length scale (required if overwrite=True)
-        overwrite: If True, recalculate p-values from scratch. If False, load from cache.
-        mode: Resimulation-locus selection mode passed to p_value_using_resim ('random' or 'top')
-        optimize_ls_separately: Passed to p_value_using_resim; only used when mode='top'. See its
-            docstring for details.
-        n_jobs: joblib workers for any resim that isn't already cached (default 1)
+        loci_df: the combined loci table to score.
+        null_df: pooled permutation null (columns chrom, direction, stat, stat_<ls>).
+        strategy: 'zpool' (default), 'pooled' or 'perchrom' -- how the null is stratified before the
+            empirical p is read. See permutation.permutation_p. 'perchrom' is a diagnostic only: a
+            permutation yields ~6-8 loci per chromosome, so its per-stratum reference is far too
+            small for the FDR to ever reach significance.
     """
-    from spice.tsg_og.p_values import (
-        get_actual_p_values_from_results, get_actual_p_values_per_ls_from_results)
+    if strategy not in STRATEGIES:
+        raise ValueError(f'strategy must be one of {STRATEGIES}, got {strategy!r}')
+    log_debug(logger, f'Assigning fitness p-values to {len(loci_df)} loci from a permutation null '
+                      f'of {len(null_df)} loci (strategy={strategy})')
 
-
-    log_debug(logger, f'Assigning fitness p-values to loci for {len(data_per_length_scale)} chromosomes with N_random={N_random}, n_iterations_optim={n_iterations_optim}, mode={mode}, optimize_ls_separately={optimize_ls_separately}, overwrite={overwrite}')
-
-    loci_df['p_value_raw'] = 1
+    loci_df = loci_df.copy()
+    loci_df['p_value_raw'] = permutation_p(loci_df, null_df, strategy, column='stat')
     for ls in LENGTH_SCALE_NAMES:
-        loci_df[f'p_value_raw_{ls}'] = 1
-
-    for cur_chrom in data_per_length_scale.keys():
-        for cur_type in ['OG', 'TSG']:
-            cur_loci = loci_df.query('chrom == @cur_chrom and type == @cur_type')
-            if len(cur_loci) == 0:
-                # No loci of this type on this chromosome: nothing to score, and the fitness statistic
-                # (get_actual_p_values_* -> _observed_fitness_per_ls) would index an empty frame. Skip
-                # before touching the resim null; these rows don't exist, so the init raw p=1 is moot.
-                continue
-            p_value_results = resim_null_for_chrom_type(
-                cur_chrom, cur_type, data_per_length_scale[cur_chrom], output_dir,
-                N_random, n_iterations_optim, mode=mode, optimize_ls_separately=optimize_ls_separately,
-                overwrite=overwrite, n_jobs=n_jobs)
-
-            # Apply p-values to loci dataframe
-            p_values = get_actual_p_values_from_results(cur_loci, p_value_results, N_random)
-            loci_df.loc[cur_loci.index, 'p_value_raw'] = p_values
-
-            p_values_per_ls = get_actual_p_values_per_ls_from_results(cur_loci, p_value_results, N_random)
-            for i, ls in enumerate(LENGTH_SCALE_NAMES):
-                loci_df.loc[cur_loci.index, f'p_value_raw_{ls}'] = p_values_per_ls[:, i]
+        loci_df[f'p_value_raw_{ls}'] = permutation_p(loci_df, null_df, strategy,
+                                                     column=f'stat_{ls}')
 
     loci_df['p_value'] = false_discovery_control(loci_df['p_value_raw'].values)
     loci_df[[f'p_value_{ls}' for ls in LENGTH_SCALE_NAMES]] = np.reshape(false_discovery_control(
         loci_df[[f'p_value_raw_{ls}' for ls in LENGTH_SCALE_NAMES]].values, axis=None), (-1, 4))
-
     return loci_df

@@ -1,16 +1,37 @@
 #!/usr/bin/env python
 """Command-line interface for SPICE."""
 
+import glob
 import os
-import sys
 import argparse
-import subprocess
 import re
 
 # Import base package only; defer submodule imports until after config is loaded
+import pandas as pd
+
 import spice
+
+#: default permutations for the fitness p-value null; mirrors
+#: spice.tsg_og.permutation.DEFAULT_K, duplicated because the argument parser is built
+#: before any spice module (and so any config) may be imported.
+_DEFAULT_K = 16
 from spice.utils import save_pickle, open_pickle
 # No other SPICE imports here!
+
+
+def _apply_seed(args, logger):
+    """Fix this run's RNG seed: --seed, else params.seed from the config, else the default.
+
+    Every SPICE command is stochastic, so this is what makes a run repeatable; see
+    spice.random_state for what the seed does and does not cover (wall-clock limits are outside it).
+    """
+    from spice import config
+    from spice.random_state import set_seed
+
+    cli_seed = getattr(args, 'seed', None)
+    seed = set_seed(cli_seed if cli_seed is not None else config['params'].get('seed'))
+    logger.info(f'Random seed: {seed} (from {"--seed" if cli_seed is not None else "config params.seed"})')
+    return seed
 
 
 def main_event_inference(args):
@@ -32,91 +53,6 @@ def main_event_inference(args):
     invalid_steps = [step for step in which if step not in valid_steps]
     if invalid_steps:
         raise ValueError(f"Invalid step(s): {', '.join(invalid_steps)}. Valid steps are: preprocessing, split, all_solutions, disambiguate, large_chroms, combine")
-
-    # Handle unlock early to avoid expensive imports
-    if args.unlock:
-        spice.set_config(args.config_path)
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        snakefile = os.path.join(repo_root, 'Snakefile_event_inference')
-        if not os.path.exists(snakefile):
-            raise FileNotFoundError(f"Snakefile_event_inference not found at {snakefile}")
-
-        cmd = [
-            'snakemake',
-            '-s', snakefile,
-            '--configfile', args.config_path,
-            '--unlock'
-        ]
-
-        env = os.environ.copy()
-        env['SPICE_CONFIG'] = os.path.abspath(args.config_path)
-        
-        print(f"Unlocking Snakemake working directory with config: {args.config_path}")
-        result = subprocess.run(cmd, env=env)
-        
-        if result.returncode == 0:
-            print("Successfully unlocked Snakemake working directory.")
-        else:
-            print(f"Unlock failed with return code {result.returncode}")
-            sys.exit(result.returncode)
-        
-        return
-
-    # Handle snakemake mode early to avoid expensive imports
-    if args.snakemake:
-        spice.set_config(args.config_path)
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        snakefile = os.path.join(repo_root, 'Snakefile_event_inference')
-        if not os.path.exists(snakefile):
-            raise FileNotFoundError(f"Snakefile_event_inference not found at {snakefile}")
-
-        if not args.run_preprocessing:
-            spice.load_config(args.config_path)
-            from spice import config
-            import shutil
-
-            name = config.get('name')
-            if not name:
-                raise ValueError("Config file must specify a 'name' field.")
-            data_dir = config['directories']['data_dir']
-            src = config['input_files']['copynumber']
-            dst = os.path.join(data_dir, f"{name}_processed.tsv")
-            os.makedirs(data_dir, exist_ok=True)
-
-            if not os.path.isabs(src):
-                src = os.path.join(config['directories']['base_dir'], src)
-
-            if not os.path.exists(dst):
-                print(f"--run-preprocessing not set. Copying {src} -> {dst}")
-                shutil.copyfile(src, dst)
-            else:
-                print(f"--run-preprocessing not set. Using existing {dst}")
-
-        cmd = [
-            'snakemake',
-            '-s', snakefile,
-            '--rerun-triggers', 'mtime',
-            '--verbose',
-            '--configfile', args.config_path,
-            '--config', f'config_path={args.config_path}',
-            '--keep-going'
-        ]
-        
-        # Pass run_preprocessing to snakemake if set
-        if args.run_preprocessing:
-            cmd.extend(['--config', 'run_preprocessing=True'])
-        
-        # add execution mode and number of jobs/cores
-        if args.snakemake_mode == 'slurm':
-            cmd.extend(['--slurm', '-j', str(args.snakemake_jobs)])
-        else:
-            # Local mode: explicitly disable profiles and cluster submission
-            cmd.extend(['--profile', '', '--cores', str(args.snakemake_cores)])
-
-        env = os.environ.copy()
-        env['SPICE_CONFIG'] = os.path.abspath(args.config_path)
-        subprocess.run(cmd, check=True, env=env)
-        return
 
     # Load configuration before importing submodules that may read it
     spice.load_config(args.config_path)
@@ -180,6 +116,7 @@ def main_event_inference(args):
 
     logger.info('Running SPICE: Selection Patterns In somatic Copy-number Events')
     logger.info(f'Running event inference for project name {name} with config file {args.config_path}')
+    _apply_seed(args, logger)
 
     logger.info(f'Results will be stored in {results_events_dir}')
     logger.info(f'Running the following steps: {", ".join(which)}')
@@ -200,10 +137,8 @@ def main_event_inference(args):
         logger.warning(f"Large number of input samples detected (N={n_samples}).")
         logger.warning("")
         logger.warning("SPICE can be very slow when processing many samples in serial mode.")
-        logger.warning("For large datasets, we strongly recommend using the Snakemake workflow")
-        logger.warning("for parallel execution on a cluster.")
-        logger.warning("")
-        logger.warning("See README section 'Using with Snakemake' for more information:")
+        logger.warning("For large datasets, consider using --cores to parallelize, or splitting")
+        logger.warning("the run across --ids batches on a cluster.")
         logger.warning("=" * 80)
 
     total_cn = config['params'].get('total_cn', False)
@@ -243,8 +178,9 @@ def main_event_inference(args):
         skip_existing = config['params'].get('skip_existing', False)
         for wgd_status in ['nowgd', 'wgd']:
             is_wgd = (wgd_status == 'wgd')
+            # sorted for deterministic output
             cur_ids = [x.replace('.pickle', '')
-                    for x in os.listdir(os.path.join(str(results_events_dir), wgd_status, 'chrom_data_full'))]
+                    for x in sorted(os.listdir(os.path.join(str(results_events_dir), wgd_status, 'chrom_data_full')))]
             if selected_ids is not None:
                 cur_ids = [x for x in cur_ids if x in selected_ids]
 
@@ -285,7 +221,7 @@ def main_event_inference(args):
                 continue
             is_wgd = (wgd_status == 'wgd')
             cur_ids = [x.replace('.pickle', '')
-                    for x in os.listdir(os.path.join(str(results_events_dir), wgd_status, 'full_paths_multiple_solutions'))]
+                    for x in sorted(os.listdir(os.path.join(str(results_events_dir), wgd_status, 'full_paths_multiple_solutions')))]
             if selected_ids is not None:
                 cur_ids = [x for x in cur_ids if x in selected_ids]
             def run_knn(cur_id):
@@ -320,7 +256,7 @@ def main_event_inference(args):
                 continue
             is_wgd = (wgd_status == 'wgd')
             cur_ids = [x.replace('.pickle', '')
-                    for x in os.listdir(os.path.join(str(results_events_dir), wgd_status, 'chrom_data_large'))]
+                    for x in sorted(os.listdir(os.path.join(str(results_events_dir), wgd_status, 'chrom_data_large')))]
             if selected_ids is not None:
                 cur_ids = [x for x in cur_ids if x in selected_ids]
 
@@ -345,6 +281,9 @@ def main_event_inference(args):
                     skip_loh_check=skip_loh_check,
                     min_T=config['params']['mcmc_min_T'],
                     max_T=config['params']['mcmc_max_T'],
+                    # Runaway ceilings; None (default) = off
+                    max_iterations=config['params'].get('mcmc_max_iterations', None),
+                    loh_solve_time_limit=config['params'].get('mcmc_loh_solve_time_limit', None),
                 )
 
             results = _run_batch(cur_ids, args.cores, f'Large chromosomes ({wgd_status})', run_mcmc, logger)
@@ -406,6 +345,7 @@ def main_plotting(args):
 
     logger.info('Running SPICE: Plotting Mode')
     logger.info(f'Plotting for project name {name} with config file {args.config_path}')
+    _apply_seed(args, logger)
 
     # Load required inputs based on mode
     if args.plot_events_per_sample is not None:
@@ -471,7 +411,6 @@ def main_plotting(args):
         fig.savefig(out_path, bbox_inches='tight')
         logger.info(f'Saved plot to {out_path}')
     elif args.plot_single_locus is not None:
-        from spice.utils import open_pickle
         from spice.tsg_og.detection import convolution_simulation_per_ls
         
         detection_assignment = args.loci_mode
@@ -508,6 +447,277 @@ def main_plotting(args):
     logger.info('Done plotting.')
 
 
+
+def _permutation_unit_dir(loci_results_dir, seed):
+    return os.path.join(loci_results_dir, 'permutations', f's{seed}')
+
+
+def _invalidate_permutation_tables(loci_results_dir, index):
+    """Invalidate derived tables before a unit can change, including concurrent scatter jobs."""
+    from spice.tsg_og.permutation import NULL_FILENAME
+    for path in (os.path.join(_permutation_unit_dir(loci_results_dir, index), 'unit_loci.tsv'),
+                 os.path.join(loci_results_dir, NULL_FILENAME)):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, seed, permute_mode,
+                          steps, args, config):
+    """Detect loci on ONE positionally-permuted copy of the cohort; return its loci table.
+
+    This is the unit of work the null is built from, and it deliberately goes through the SAME
+    entry points as the real run -- process_final_events_for_loci_routines, then
+    run_loci_detection_per_chrom per chromosome, then combine_loci with the p-value off. That is
+    the whole point of the permutation null: its loci are produced by the identical cascade
+    (including every event-preprocessing and filtering step), so the fitness statistic is
+    comparable to the observed one rather than being a differently-constructed quantity.
+    """
+    from spice.main_loci_functions import (
+        run_loci_detection_per_chrom, process_final_events_for_loci_routines, combine_loci)
+    from spice.logging import get_logger
+    from spice.random_state import derive_seed
+    from spice.tsg_og import permutation
+    logger = get_logger('SPICE', spice_prefix=False)
+
+    permuted, n_moved, n_fixed = permutation.permute_events(
+        raw_events, seed=derive_seed('permutation', seed), mode=permute_mode)
+    logger.info(f'  [permutation s{seed}] moved {n_moved:,} internal events'
+                + (f', left {n_fixed:,} internal events fixed' if n_fixed else ''))
+    processed = process_final_events_for_loci_routines(
+        final_events_df=permuted,
+        remove_plateaus=loci_params.get('remove_plateaus', True),
+        remove_chrY=loci_params.get('remove_chrY', True),
+        drop_duplicates=loci_params.get('drop_duplicates', True),
+        use_observed_centromeres=loci_params.get('use_observed_centromeres', True),
+    )
+    unit_dir = _permutation_unit_dir(loci_results_dir, seed)
+    _invalidate_permutation_tables(loci_results_dir, seed)
+    os.makedirs(unit_dir, exist_ok=True)
+    for chrom in chroms:
+        run_loci_detection_per_chrom(
+            final_events_df=processed, cur_chrom=chrom, which=steps,
+            overwrite=args.overwrite,
+            overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
+            name=config['name'],
+            N_loci=loci_params['N_loci'], N_loci_spacing=loci_params.get('N_loci_spacing'),
+            loci_results_dir=unit_dir,
+            skip_up_down=loci_params['skip_up_down'], N_bootstrap=loci_params['N_bootstrap'],
+            N_kernel=loci_params['N_kernel'], use_original_rank=loci_params['use_original_rank'],
+            detection_N_iterations_base=loci_params['detection_N_iterations_base'],
+            detection_max_N_iterations=loci_params['detection_max_N_iterations'],
+            detection_final_N_iterations=loci_params['detection_final_N_iterations'],
+            detection_blocked_distance_th=loci_params['detection_blocked_distance_th'],
+            ranking_N_iterations=loci_params['ranking_N_iterations'],
+            flipping_N_iterations=loci_params['flipping_N_iterations'],
+            flipping_N_iterations_single=loci_params['flipping_N_iterations_single'],
+            limiting_N_iterations_optim=loci_params['limiting_N_iterations_optim'],
+            optimizing_N_iterations_optimization=loci_params['optimizing_N_iterations_optimization'],
+            infer_widths_N_iterations=loci_params['infer_widths_N_iterations'],
+            merge_N_iterations_optim=loci_params['merge_N_iterations_optim'],
+            filter_N_iterations_optim=loci_params['filter_N_iterations_optim'],
+            final_limiting_N_iterations_optim=loci_params['final_limiting_N_iterations_optim'],
+            N_bootstrap_for_widths=loci_params['N_bootstrap_for_widths'],
+            within_ci_N_iterations=loci_params['within_ci_N_iterations'],
+            th_locus_prominence=loci_params['th_locus_prominence'],
+            th_locus_mean_fitness=loci_params['th_locus_mean_fitness'],
+        )
+    loci_df, _, _, _ = combine_loci(loci_results_dir=unit_dir, processed_events=processed,
+                                 calculate_p_value=False, mode='detection')
+    out = os.path.join(unit_dir, 'unit_loci.tsv')
+    loci_df.to_csv(out, sep='\t', index=False)
+    return loci_df
+
+
+def _permutation_detection_steps(requested, configured):
+    """A fresh null needs a complete cascade even when the observed run only resumes/combines."""
+    for candidate in (requested, configured):
+        if not isinstance(candidate, str):
+            candidate = [step for step in candidate if step != 'combine']
+            if len(candidate) == 1:
+                candidate = candidate[0]
+        if isinstance(candidate, str):
+            if candidate in ('fast', 'full'):
+                return candidate
+            if candidate == 'detection+':
+                return 'full'
+        elif candidate and candidate[0] == 'detection' and 'final_loci_widths' in candidate:
+            return candidate
+    raise ValueError('Building a permutation null needs a complete detection cascade. Set '
+                     'loci_detection.loci_steps to fast, full, or a complete list of stages; '
+                     'use --loci-steps combine only as a command-line override.')
+
+
+def _build_permutation_null(raw_events, config, loci_params, loci_results_dir, chroms, K,
+                            permute_mode, steps, args):
+    """Build the pooled permutation null inline: K permuted cohorts, detected and pooled.
+
+    Serial by design here -- each unit is itself a full genome detection pass, so the useful
+    parallelism is across units on a cluster (`spice permute --index I --chrom C` + `--pool`), not
+    across threads inside one process.
+    """
+    from spice.logging import get_logger
+    from spice.tsg_og import permutation
+    logger = get_logger('SPICE', spice_prefix=False)
+    frames = []
+    for seed in range(1, K + 1):
+        logger.info(f'Permutation {seed}/{K}')
+        frames.append(_run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms,
+                                            seed, permute_mode, steps, args, config))
+    return permutation.null_from_loci(frames)
+
+
+def main_permute(args):
+    """Build the positional-permutation null (`spice permute`).
+
+    Three usages, all writing under <loci_results_dir>/permutations/:
+      spice permute --config c.yaml                  build the whole null in-process, then pool
+      spice permute --config c.yaml --index 3 --chrom chr7    one scatter unit
+      spice permute --config c.yaml --pool           pool the units already on disk
+
+    The unit path exists because each permutation is itself a full detection pass, so the useful
+    parallelism is across units on a cluster rather than across threads in one process.
+    """
+    spice.load_config(args.config_path)
+    from spice import config
+    from spice.logging import configure_logging, get_logger
+    from spice.main_loci_functions import (
+        run_loci_detection_per_chrom, process_final_events_for_loci_routines, combine_loci)
+    from spice.data_loaders import load_final_events
+    from spice.random_state import derive_seed
+    from spice.tsg_og import permutation
+
+    if 'name' not in config or not config['name']:
+        raise ValueError("Config file must specify a 'name' field.")
+    log_level = 'DEBUG' if args.debug else config['params'].get('logging_level', 'INFO')
+    configure_logging(log_mode=args.log, log_dir=config['directories']['log_dir'],
+                      config_name=config['name'], level=log_level)
+    logger = get_logger('SPICE', spice_prefix=False)
+    logger.info('Running SPICE: Permutation-Null Mode')
+    _apply_seed(args, logger)
+
+    loci_params = config['loci_detection']
+    loci_results_dir = os.path.join(config['directories']['results_dir'], config['name'],
+                                    'loci_of_selection')
+    os.makedirs(loci_results_dir, exist_ok=True)
+    K = args.permutations or int(loci_params.get('p_values_K', permutation.DEFAULT_K))
+    mode = args.mode or loci_params.get('p_values_permute_mode', 'rotate')
+    steps = args.loci_steps or loci_params['loci_steps']
+    if hasattr(steps, '__iter__') and not isinstance(steps, str) and len(steps) == 1:
+        steps = steps[0]
+    perm_root = os.path.join(loci_results_dir, 'permutations')
+    null_path = os.path.join(loci_results_dir, permutation.NULL_FILENAME)
+
+    # ---- pool-only: no detection, just combine the units already on disk ----
+    if args.pool:
+        unit_dirs = sorted(glob.glob(os.path.join(perm_root, 's*')),
+                           key=lambda d: int(os.path.basename(d)[1:]))
+        if not unit_dirs:
+            raise SystemExit(f'no permutation units under {perm_root} -- run the units first')
+        raw_for_pool = None
+        frames = []
+        for d in unit_dirs:
+            idx = int(os.path.basename(d)[1:])
+            f = os.path.join(d, 'unit_loci.tsv')
+            if args.overwrite or not os.path.exists(f):
+                # A scattered `--index N --chrom C` run detects but does not combine, so the unit
+                # table may be missing. Rebuild it here: the permutation is deterministic (its
+                # stream derives from the base seed and the index), so re-deriving the permuted
+                # events costs seconds and reproduces exactly what the scatter detected.
+                logger.info(f'  s{idx}: combining its per-chromosome results')
+                if raw_for_pool is None:
+                    raw_for_pool = load_final_events()
+                permuted, _, _ = permutation.permute_events(
+                    raw_for_pool, seed=derive_seed('permutation', idx), mode=mode)
+                processed = process_final_events_for_loci_routines(
+                    final_events_df=permuted,
+                    remove_plateaus=loci_params.get('remove_plateaus', True),
+                    remove_chrY=loci_params.get('remove_chrY', True),
+                    drop_duplicates=loci_params.get('drop_duplicates', True),
+                    use_observed_centromeres=loci_params.get('use_observed_centromeres', True))
+                loci_df, _, _, _ = combine_loci(loci_results_dir=d, processed_events=processed,
+                                             calculate_p_value=False, mode='detection')
+                loci_df.to_csv(f, sep='\t', index=False)
+            frames.append(pd.read_csv(f, sep='\t'))
+        null_df = permutation.null_from_loci(frames)
+        null_df.to_csv(null_path, sep='\t', index=False)
+        logger.info(f'Pooled {len(frames)} permutation units -> {len(null_df):,} null loci '
+                    f'at {null_path}')
+        return
+
+    if args.chrom is not None and args.index is None:
+        raise ValueError('--chrom names a unit within one permutation and requires --index')
+
+    events_df = load_final_events()
+    chroms_all = [c for c in sorted(events_df['chrom'].unique(),
+                                    key=lambda x: (len(x), x)) if c != 'chrY']
+
+    # ---- one unit: a single (seed, chrom) so a cluster can scatter ----
+    if args.index is not None and args.chrom is not None:
+        permuted, n_moved, n_fixed = permutation.permute_events(events_df, seed=derive_seed('permutation', args.index),
+                                                             mode=mode)
+        logger.info(f'Permutation s{args.index} ({mode}): moved {n_moved:,} internal events'
+                    + (f', left {n_fixed:,} internal events fixed' if n_fixed else ''))
+        processed = process_final_events_for_loci_routines(
+            final_events_df=permuted,
+            remove_plateaus=loci_params.get('remove_plateaus', True),
+            remove_chrY=loci_params.get('remove_chrY', True),
+            drop_duplicates=loci_params.get('drop_duplicates', True),
+            use_observed_centromeres=loci_params.get('use_observed_centromeres', True))
+        unit_dir = _permutation_unit_dir(loci_results_dir, args.index)
+        _invalidate_permutation_tables(loci_results_dir, args.index)
+        os.makedirs(unit_dir, exist_ok=True)
+        _detect_one(run_loci_detection_per_chrom, processed, args.chrom, steps, loci_params,
+                    unit_dir, config, args)
+        logger.info(f'Unit s{args.index}/{args.chrom} complete. Once every (index, chrom) unit is '
+                    f'done, `spice permute --pool` combines each permutation and pools them.')
+        return
+
+    # ---- one whole permutation, or all K ----
+    seeds = [args.index] if args.index is not None else list(range(1, K + 1))
+    frames = []
+    for seed in seeds:
+        logger.info(f'Permutation {seed}' + (f'/{K}' if args.index is None else ''))
+        frames.append(_run_permutation_unit(events_df, loci_params, loci_results_dir, chroms_all,
+                                            seed, mode, steps, args, config))
+    if args.index is not None:
+        logger.info(f'Permutation s{args.index} complete; pool with `spice permute --pool`.')
+        return
+    null_df = permutation.null_from_loci(frames)
+    null_df.to_csv(null_path, sep='\t', index=False)
+    logger.info(f'Built the permutation null from {K} permutations: {len(null_df):,} loci '
+                f'-> {null_path}')
+
+
+def _detect_one(run_loci_detection_per_chrom, processed, chrom, steps, loci_params, out_dir,
+                config, args):
+    """One chromosome of detection into `out_dir`, with the run's own detection parameters."""
+    run_loci_detection_per_chrom(
+        final_events_df=processed, cur_chrom=chrom, which=steps, overwrite=args.overwrite,
+        overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
+        name=config['name'], N_loci=loci_params['N_loci'],
+        N_loci_spacing=loci_params.get('N_loci_spacing'), loci_results_dir=out_dir,
+        skip_up_down=loci_params['skip_up_down'], N_bootstrap=loci_params['N_bootstrap'],
+        N_kernel=loci_params['N_kernel'], use_original_rank=loci_params['use_original_rank'],
+        detection_N_iterations_base=loci_params['detection_N_iterations_base'],
+        detection_max_N_iterations=loci_params['detection_max_N_iterations'],
+        detection_final_N_iterations=loci_params['detection_final_N_iterations'],
+        detection_blocked_distance_th=loci_params['detection_blocked_distance_th'],
+        ranking_N_iterations=loci_params['ranking_N_iterations'],
+        flipping_N_iterations=loci_params['flipping_N_iterations'],
+        flipping_N_iterations_single=loci_params['flipping_N_iterations_single'],
+        limiting_N_iterations_optim=loci_params['limiting_N_iterations_optim'],
+        optimizing_N_iterations_optimization=loci_params['optimizing_N_iterations_optimization'],
+        infer_widths_N_iterations=loci_params['infer_widths_N_iterations'],
+        merge_N_iterations_optim=loci_params['merge_N_iterations_optim'],
+        filter_N_iterations_optim=loci_params['filter_N_iterations_optim'],
+        final_limiting_N_iterations_optim=loci_params['final_limiting_N_iterations_optim'],
+        N_bootstrap_for_widths=loci_params['N_bootstrap_for_widths'],
+        within_ci_N_iterations=loci_params['within_ci_N_iterations'],
+        th_locus_prominence=loci_params['th_locus_prominence'],
+        th_locus_mean_fitness=loci_params['th_locus_mean_fitness'])
+
 def main_loci_detection(args):
     """Run loci detection mode (de-novo)."""
     # Load configuration
@@ -533,38 +743,12 @@ def main_loci_detection(args):
 
     logger.info('Running SPICE: Loci Detection Mode (De-Novo)')
     logger.info(f'Project name: {config["name"]}')
-    
-    # Handle snakemake mode
-    if args.snakemake:
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        snakefile = os.path.join(repo_root, 'Snakefile_loci_detection')
-        if not os.path.exists(snakefile):
-            raise FileNotFoundError(f"Snakefile_loci_detection not found at {snakefile}")
+    _apply_seed(args, logger)
 
-        cmd = [
-            'snakemake',
-            '-s', snakefile,
-            '--rerun-triggers', 'mtime',
-            '--verbose',
-            '--configfile', args.config_path,
-            '--config', f'config_path={args.config_path}',
-        ]
-        
-        # Add number of jobs/cores
-        if args.snakemake_mode == 'slurm':
-            cmd.extend(['--slurm', '-j', str(args.snakemake_jobs), '--keep-going'])
-        else:
-            cmd.extend(['-c', str(args.snakemake_cores)])
-
-        env = os.environ.copy()
-        env['SPICE_CONFIG'] = os.path.abspath(args.config_path)
-        logger.info(f'Running Snakemake loci detection workflow')
-        subprocess.run(cmd, check=True, env=env)
-        return
-    
-    # Non-Snakemake mode: Use the loci detection pipeline
+    # Use the loci detection pipeline
     from spice.main_loci_functions import run_loci_detection_per_chrom, process_final_events_for_loci_routines
     from spice.data_loaders import load_final_events
+    from spice.tsg_og import permutation
     
     # Get loci detection parameters from config
     loci_params = config['loci_detection']
@@ -614,20 +798,23 @@ def main_loci_detection(args):
     # below skips every chromosome and then returns early -> a green run that produces nothing.
     # Reject it rather than silently no-op.
     if args.chrom is not None and steps_to_run == "combine":
-        raise ValueError("--chrom runs one chromosome's detection + p-value part and is incompatible "
+        raise ValueError("--chrom runs one chromosome's detection and is incompatible "
                          "with --loci-steps combine (the cross-chromosome combine runs without --chrom).")
     calc_p = loci_params.get('calculate_p_value', True)
-    p_values_N_random = loci_params['p_values_N_random']
-    p_values_N_iterations = loci_params['p_values_N_iterations']
-    p_value_mode = loci_params['p_values_mode']
-    p_values_optimize_ls_separately = loci_params.get('p_values_optimize_ls_separately', False)
+    p_values_K = int(loci_params.get('p_values_K', permutation.DEFAULT_K))
+    p_values_strategy = loci_params.get('p_values_strategy', 'zpool')
+    p_values_permute_mode = loci_params.get('p_values_permute_mode', 'rotate')
     p_thresh = loci_params['p_value_threshold'] # loci with q_value >= this are dropped
+    # Absolute floor on the same statistic the p-value ranks, applied POST-NULL beside that drop.
+    # Absent/None = no floor. Distinct from detection's `th_locus_mean_fitness`, which filters the
+    # permutation null too -- see the note in combine_loci.
+    mean_fit_thresh = loci_params.get('mean_fitness_threshold')
     if calc_p:
-        logger.info(f'Fitness p-value (resim null): mode={p_value_mode}, N_iterations_optim={p_values_N_iterations}, '
-                    f'N_random={p_values_N_random}, optimize_ls_separately={p_values_optimize_ls_separately}; '
+        logger.info(f'Fitness p-value (permutation null): K={p_values_K}, '
+                    f'strategy={p_values_strategy}, permute_mode={p_values_permute_mode}; '
                     f'keeping loci with q_value < {p_thresh}')
     else:
-        logger.info('Fitness p-value resim disabled (calculate_p_value=false)')
+        logger.info('Fitness p-value disabled (calculate_p_value=false)')
 
     for chrom in chromosomes:
         if steps_to_run == "combine":
@@ -641,6 +828,7 @@ def main_loci_detection(args):
             overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
             name=config['name'],
             N_loci=loci_params['N_loci'],
+            N_loci_spacing=loci_params.get('N_loci_spacing'),   # overrides N_loci per chromosome
             loci_results_dir=loci_results_dir,
             skip_up_down=loci_params['skip_up_down'],
             N_bootstrap=loci_params['N_bootstrap'],
@@ -662,21 +850,12 @@ def main_loci_detection(args):
             N_bootstrap_for_widths=loci_params['N_bootstrap_for_widths'],
             within_ci_N_iterations=loci_params['within_ci_N_iterations'],
             th_locus_prominence=loci_params['th_locus_prominence'],
+            th_locus_mean_fitness=loci_params['th_locus_mean_fitness'],
         )
-        if calc_p:
-            # Warm the resim-null cache for this chromosome (both tracks) in parallel. The combine's
-            # assign_p_values shares this cache key, so it reuses these nulls and never re-simulates.
-            from spice.tsg_og.p_values import resim_null_for_chrom_type
-            dpls = open_pickle(os.path.join(loci_results_dir, 'data_per_length_scale', f'{chrom}.pickle'))
-            for cur_type in ('OG', 'TSG'):
-                resim_null_for_chrom_type(chrom, cur_type, dpls, loci_results_dir,
-                                          p_values_N_random, p_values_N_iterations, mode=p_value_mode,
-                                          optimize_ls_separately=p_values_optimize_ls_separately,
-                                          overwrite=args.overwrite, n_jobs=args.cores)
-            logger.info(f'  warmed fitness p-value resim cache for {chrom}')
 
     if args.chrom is not None:
-        logger.info(f'Per-chromosome step for {args.chrom} complete (detection + p-value part); skipping combine.')
+        logger.info(f'Per-chromosome step for {args.chrom} complete (detection); skipping combine. The '
+                    f'permutation null is built once per cohort, at combine time or by `spice permute`.')
         return
 
     if not (steps_to_run in ['fast', 'full', 'combine'] or 'combine' in steps_to_run or '+' in steps_to_run):
@@ -687,16 +866,34 @@ def main_loci_detection(args):
     # Combine results from all chromosomes
     logger.info('Combining all loci detection results across chromosomes')
     from spice.main_loci_functions import combine_loci # has to be imported here
-    final_loci_df, filtered_selection_points, filtered_loci_widths = combine_loci(
+    # The null is built ONCE per cohort, not per chromosome: it is the pooled set of loci detection
+    # finds on K positionally-permuted copies of the events. Reuse a null a previous `spice permute`
+    # wrote when one is present, else build it inline -- which costs K full detection passes, so for
+    # a genome-scale cohort prefer `spice permute` scattered over a cluster.
+    null_df = None
+    if calc_p:
+        null_path = os.path.join(loci_results_dir, permutation.NULL_FILENAME)
+        if os.path.exists(null_path) and not args.overwrite:
+            null_df = pd.read_csv(null_path, sep='\t')
+            logger.info(f'Loaded permutation null: {len(null_df):,} loci from {null_path}')
+        else:
+            logger.info(f'No permutation null at {null_path}; building it inline (K={p_values_K})')
+            null_df = _build_permutation_null(
+                raw_events=final_events_df, config=config, loci_params=loci_params,
+                loci_results_dir=loci_results_dir, chroms=list(chromosomes), K=p_values_K,
+                permute_mode=p_values_permute_mode,
+                steps=_permutation_detection_steps(steps_to_run, loci_params['loci_steps']),
+                args=args)
+            null_df.to_csv(null_path, sep='\t', index=False)
+            logger.info(f'Wrote permutation null ({len(null_df):,} loci) to {null_path}')
+    final_loci_df, filtered_selection_points, filtered_loci_widths, unfiltered_loci_df = combine_loci(
         loci_results_dir=loci_results_dir,
         processed_events=processed_events,
         calculate_p_value=calc_p,
-        p_values_N_random=loci_params['p_values_N_random'],
-        p_values_N_iterations=loci_params['p_values_N_iterations'],
         p_value_threshold=loci_params['p_value_threshold'],
-        p_values_mode=loci_params['p_values_mode'],
-        p_values_optimize_ls_separately=p_values_optimize_ls_separately,
-        p_value_cores=args.cores,
+        mean_fitness_threshold=mean_fit_thresh,
+        permutation_null=null_df,
+        p_values_strategy=p_values_strategy,
         overwrite=args.overwrite,
         mode='detection'
     )
@@ -705,11 +902,33 @@ def main_loci_detection(args):
     final_loci_output_path = os.path.join(config['directories']['results_dir'], config['name'], 'final_loci_detection.tsv')
     final_loci_df.to_csv(final_loci_output_path, sep='\t', index=True)
     logger.info(f'Saved final combined loci detection results to {final_loci_output_path}')
+    # ... and the PRE-DROP table beside it. Whenever a threshold actually removes loci, the canonical
+    # table is the CALLED set, which is the wrong input for a calibration read: the QQ, cumulative,
+    # p-value-histogram and length-scale figures need every detected locus with its p/q. Identical to
+    # the canonical table on a cohort that drops nothing.
+    unfiltered_output_path = os.path.join(config['directories']['results_dir'], config['name'],
+                                          'final_loci_detection_unfiltered.tsv')
+    unfiltered_loci_df.to_csv(unfiltered_output_path, sep='\t', index=True)
+    logger.info(f'Saved the pre-filter loci table ({len(unfiltered_loci_df)} loci) to {unfiltered_output_path}')
     save_pickle(filtered_selection_points, os.path.join(config['directories']['results_dir'], config['name'], 'loci_of_selection', 'detection', 'final_loci_detection_filtered.pickle'))
     save_pickle(filtered_loci_widths, os.path.join(config['directories']['results_dir'], config['name'], 'loci_of_selection', 'detection', 'final_loci_detection_filtered_widths.pickle'))
 
     logger.info('Loci detection pipeline completed.')
 
+
+
+def _load_permutation_null_or_none(loci_results_dir):
+    """Read the pooled permutation null if `spice permute` has written one, else None.
+
+    Assignment mode has no per-chromosome detection of its own to hang an inline build off, so it
+    consumes a null built beforehand; combine_loci raises a pointed error if the p-value is on and
+    no null is available.
+    """
+    from spice.tsg_og import permutation
+    path = os.path.join(loci_results_dir, permutation.NULL_FILENAME)
+    if os.path.exists(path):
+        return pd.read_csv(path, sep='\t')
+    return None
 
 def main_loci_assignment(args):
     """Run loci assignment mode (assign fitness to predefined loci)."""
@@ -733,6 +952,7 @@ def main_loci_assignment(args):
 
     logger.info('Running SPICE: Loci Assignment Mode')
     logger.info(f'Project name: {config["name"]}')
+    _apply_seed(args, logger)
     
     # Run loci assignment pipeline
     from spice.main_loci_functions import loci_assignment, process_final_events_for_loci_routines
@@ -769,11 +989,11 @@ def main_loci_assignment(args):
         within_ci_N_iterations=loci_params['loci_assignment_within_ci_N_iterations'],
         N_iterations_optim=loci_params['loci_assignment_N_iterations'],
         calculate_p_value=loci_params['calculate_p_value'],
-        p_values_N_random=loci_params['p_values_N_random'],
-        p_values_N_iterations=loci_params['p_values_N_iterations'],
-        p_values_mode=loci_params['p_values_mode'],
-        p_values_optimize_ls_separately=loci_params.get('p_values_optimize_ls_separately', False),
         p_value_threshold=loci_params['p_value_threshold'],
+        permutation_null=_load_permutation_null_or_none(
+            os.path.join(config['directories']['results_dir'], config['name'],
+                         'loci_of_selection')),
+        p_values_strategy=loci_params.get('p_values_strategy', 'zpool'),
         overwrite=args.overwrite,
         overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
     )
@@ -788,15 +1008,6 @@ def main_loci_assignment(args):
 
 def main():
     """Main CLI entry point for SPICE."""
-    # Allow `spice --config <path> --snakemake` (default to event_inference mode)
-    if '--snakemake' in sys.argv:
-        raise NotImplementedError("Snakemake usage is coming soon!")
-    if '--snakemake' in sys.argv and not any(
-        mode in sys.argv for mode in ['event_inference', 'plotting', 'loci_detection']
-    ):
-        raise ValueError("When using --snakemake, you must also specify a mode: event_inference, plotting, or loci_detection.")
-        
-
     parser = argparse.ArgumentParser(
         description='SPICE: Selection Patterns In somatic Copy-number Events',
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -848,6 +1059,13 @@ Examples:
         '--debug',
         action='store_true',
         help='Enable DEBUG logging globally, overriding config logging_level'
+    )
+    common_parser.add_argument(
+        '--seed',
+        type=int,
+        default=None,
+        help='Base RNG seed, overriding "seed" in the config params. Every random draw derives from '
+             'it, so the same seed on the same input reproduces the run (see spice.random_state).'
     )
     
     # ===== EVENT INFERENCE SUBPARSER =====
@@ -908,34 +1126,6 @@ Examples:
         dest='pre_skip_centromeres',
         action='store_true',
         help='Preprocessing: skip centromere binning'
-    )
-    parser_event.add_argument(
-        '--snakemake',
-        action='store_true',
-        help='Run the event inference workflow using Snakemake instead of the Python runner'
-    )
-    parser_event.add_argument(
-        '--snakemake-mode',
-        choices=['local', 'slurm'],
-        default='local',
-        help='Snakemake execution mode: local or slurm (default: local)'
-    )
-    parser_event.add_argument(
-        '--snakemake-jobs',
-        type=int,
-        default=250,
-        help='Number of jobs for Snakemake on Slurm (-j, default: 250)'
-    )
-    parser_event.add_argument(
-        '--snakemake-cores',
-        type=int,
-        default=1,
-        help='Number of cores for local Snakemake execution (-c, default: 1)'
-    )
-    parser_event.add_argument(
-        '--unlock',
-        action='store_true',
-        help='Unlock the Snakemake working directory and exit'
     )
     parser_event.set_defaults(func=main_event_inference)
     
@@ -1000,13 +1190,13 @@ Examples:
         '--loci-steps',
         nargs='+',
         default=None,
-        help='Steps to run. If not present will use "loci_steps" from config. Use "fast" for accelerated mode, "all" or "default" for full pipeline, or a trailing + (e.g., split+) to run that step and all subsequent steps.'
+        help='Steps to run. If not present will use "loci_steps" from config. Use "fast" for the accelerated subset, "full" for the full pipeline, or a trailing + (e.g., split+) to run that step and all subsequent steps.'
     )
     parser_loci.add_argument(
         '--cores', '-j',
         type=int,
         default=1,
-        help='Parallel joblib workers for the fitness p-value resim (independent resims; default: 1)'
+        help='Parallel workers where the step supports them (default: 1)'
     )
     parser_loci.add_argument(
         '--overwrite',
@@ -1014,35 +1204,50 @@ Examples:
         help='Run new and overwrite existing data'
     )
     parser_loci.add_argument(
-        '--snakemake',
-        action='store_true',
-        help='Run the loci detection workflow using Snakemake'
-    )
-    parser_loci.add_argument(
-        '--snakemake-mode',
-        choices=['local', 'slurm'],
-        default='local',
-        help='Snakemake execution mode: local or slurm (default: local)'
-    )
-    parser_loci.add_argument(
-        '--snakemake-jobs',
-        type=int,
-        default=250,
-        help='Number of jobs for Snakemake on Slurm (-j, default: 250)'
-    )
-    parser_loci.add_argument(
-        '--snakemake-cores',
-        type=int,
-        default=1,
-        help='Number of cores for local Snakemake execution (-c, default: 1)'
-    )
-    parser_loci.add_argument(
         '--chrom',
         default=None,
-        help='Run detection + the per-chromosome fitness p-value for this one chromosome only '
-             '(a parallel scatter unit); skips the cross-chromosome combine.'
+        help='Run detection for this one chromosome only (a parallel scatter unit); skips the '
+             'cross-chromosome combine. The permutation null is built once per cohort, not here.'
     )
     parser_loci.set_defaults(func=main_loci_detection)
+
+    # ===== PERMUTATION-NULL SUBPARSER =====
+    parser_perm = subparsers.add_parser(
+        'permute',
+        parents=[common_parser],
+        help='Build the positional-permutation null for the fitness p-value',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description='Detect loci on positionally-permuted copies of the cohort and pool them into '
+                    'the null the fitness p-value is read against. Run with no unit flags to build '
+                    'the whole null in-process; use --index/--chrom for a single unit (so a cluster '
+                    'can scatter over K x chromosomes) and then --pool to combine the units.'
+    )
+    parser_perm.add_argument('-k', '--permutations', type=int, default=None,
+                             help=f'Number of permutations; default from the config key p_values_K '
+                                  f'(fallback {_DEFAULT_K}). Do not lower it to save '
+                                  f'time: the empirical p floors at 1/(pooled+1) and that floor '
+                                  f'binds the FDR.')
+    parser_perm.add_argument('--index', type=int, default=None,
+                             help='Build only this permutation, 1-based. With --chrom, one scatter '
+                                  'unit. Its RNG stream derives from the base --seed, so the null '
+                                  'is reproducible and every index is a different permutation.')
+    parser_perm.add_argument('--chrom', default=None,
+                             help='Restrict a unit to this chromosome (requires --index).')
+    parser_perm.add_argument('--pool', action='store_true',
+                             help='Pool the per-unit tables already on disk into the null table '
+                                  'and exit, without detecting anything.')
+    parser_perm.add_argument('--mode', choices=('rotate', 'uniform'), default=None,
+                             help="Positional model: 'rotate' shifts each (sample, chrom, arm) "
+                                  "circularly, cutting only between events; 'uniform' places each "
+                                  "event independently. Default from p_values_permute_mode.")
+    parser_perm.add_argument('--loci-steps', nargs='+', default=None,
+                             help='Detection steps for the permuted cohorts; must match the real '
+                                  'run or the null is not comparable. Default: the config value.')
+    parser_perm.add_argument('--cores', '-j', type=int, default=1,
+                             help='Parallel workers where supported (default: 1)')
+    parser_perm.add_argument('--overwrite', action='store_true',
+                             help='Rebuild units and the pooled null even if present')
+    parser_perm.set_defaults(func=main_permute)
 
     # ===== LOCI ASSIGNMENT SUBPARSER =====
     parser_assign = subparsers.add_parser(

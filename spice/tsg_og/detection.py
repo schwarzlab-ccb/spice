@@ -9,6 +9,7 @@ import numpy as np
 from spice import data_loaders, directories, config
 from spice.utils import open_pickle, CALC_NEW
 from spice.logging import log_debug, get_logger
+from spice.random_state import derive_seed, np_rng, seed_task
 from spice.tsg_og.simulation import (
     SelectionPoints, create_convolution_kernel, create_centromere_values, Locus,
     convolution_simulation, combine_selection_points, copy_list_of_selection_points,
@@ -29,9 +30,29 @@ PLATEAU_WIDTH = 10e5
 CHROM_LENS = data_loaders.load_chrom_lengths()
 
 
+def _prepare_mse_terms(data_per_length_scale):
+    """The loop-invariant half of calc_mse_loss, per length scale.
+
+    _optimize_selection_points mutates only the generated signals, so the centromere mask, the
+    masked observed signal and the normaliser are constant for a whole optimisation. Hoisting
+    them out of its iteration loop avoids re-doing the fancy-index copy of data['signals'] for
+    all eight length scales on every single iteration.
+    """
+    return [(data['non_centromere_index'],
+             data['signals'][data['non_centromere_index']],
+             data['cur_loss_norm'])
+            for data in data_per_length_scale.values()]
+
+
+def calc_mse_loss_prepared(mse_terms, cur_conv_simulated):
+    """calc_mse_loss evaluated against terms from _prepare_mse_terms. Same value, same order."""
+    return sum([np.mean((sig_masked - generated_signal[non_centromere_index]) ** 2) / cur_loss_norm
+                for (non_centromere_index, sig_masked, cur_loss_norm), generated_signal
+                in zip(mse_terms, cur_conv_simulated)])
+
+
 def calc_mse_loss(data_per_length_scale, cur_conv_simulated):
-    return sum([np.mean((data['signals'][data['non_centromere_index']] - generated_signal[data['non_centromere_index']]) ** 2) / data['cur_loss_norm']
-                for data, generated_signal in zip(data_per_length_scale.values(), cur_conv_simulated)])
+    return calc_mse_loss_prepared(_prepare_mse_terms(data_per_length_scale), cur_conv_simulated)
 
 
 def calc_within_ci_bootstrap(data_per_length_scale, simulated_conv, exclude_zero_signal=False):
@@ -71,6 +92,8 @@ def collect_data_per_length_scale(
         N_bootstrap=1_000,
         N_kernel=100_000
         ):
+    # Kernel simulations must not inherit whether bootstrap signals were cached.
+    seed_task(derive_seed('collect_data_per_length_scale', cur_chrom, N_bootstrap, N_kernel))
     log_debug(logger, f'Collecting data for all length scales for {cur_chrom}') 
 
     plateau_events = final_events_df.query('plateau != "neither_left_nor_right"').copy().reset_index(drop=True)
@@ -239,15 +262,18 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
     assert len(loci_to_optimize) > 0, 'No loci to optimize'
     assert N_iterations == 0 or N_iterations >= N_iterations_base, f'N_iterations ({N_iterations}) should be greater than N_iterations_base ({N_iterations_base})'
 
+    # extract information from data_per_length_scale once
+    mse_terms = _prepare_mse_terms(data_per_length_scale)
+
     for iteration in range(N_iterations):
         # Choose a cluster index to modify (the first N_iteration_base ones only optimize last one)
         cur_cluster_i = (len(best_selection_points_per_cluster) - 1 if (iteration < N_iterations_base and not final_iteration)
-                         else np.random.choice(loci_to_optimize))
+                         else np_rng().choice(loci_to_optimize))
         cur_cluster_pos = best_selection_points_per_cluster[cur_cluster_i][0][0].pos
         cur_cluster_fitness = [x[0].fitness for x in best_selection_points_per_cluster[cur_cluster_i]]
 
         # Randomly adjust position (10% of the time) or fitness (90% of the time)
-        pos_change = max_pos_change * np.random.uniform(-1, 1) if np.random.random() < (allow_pos_change * 0.1) else 0
+        pos_change = max_pos_change * np_rng().uniform(-1, 1) if np_rng().random_sample() < (allow_pos_change * 0.1) else 0
         new_cluster_pos = cur_cluster_pos + pos_change
 
         # Check proximity to blocked positions
@@ -271,7 +297,7 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
             if not allowed_fitness_change[:, cur_cluster_i].any():
                 continue
             # 50% chance to adjust fitness based on residuals or randomly
-            if generated_signals[0] is not None and np.random.random() < 0.5:
+            if generated_signals[0] is not None and np_rng().random_sample() < 0.5:
                 fitness_diff = np.array([(data['signals'] - generated_signal)[int(cur_cluster_pos // segment_size_dict[data['length_scale']])] / 
                                         (data['signals'][int(cur_cluster_pos // segment_size_dict[data['length_scale']])] + 1e-10)
                                          for data, generated_signal in
@@ -279,9 +305,9 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
             else:
                 fitness_diff = np.ones(8)
 
-            cur_fitness_ls_i = np.random.choice(np.where(allowed_fitness_change[:, cur_cluster_i])[0])
+            cur_fitness_ls_i = np_rng().choice(np.where(allowed_fitness_change[:, cur_cluster_i])[0])
             fitness_diff = np.array([x if i == cur_fitness_ls_i else 0 for i, x in enumerate(fitness_diff)])
-            fitness_change = np.maximum(cur_cluster_fitness, 1) * fitness_diff * np.random.uniform()
+            fitness_change = np.maximum(cur_cluster_fitness, 1) * fitness_diff * np_rng().uniform()
             new_fitness_values = np.minimum(cur_cluster_fitness + fitness_change, max_fitness)
             if up_down_order is not None and len(up_down_order) > 0:
                 # up: pos gains and neg losses
@@ -328,7 +354,7 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
                 height_multiplier=data.get('height_multiplier', None)
                 )
         
-        cur_loss = calc_mse_loss(data_per_length_scale, generated_signals)
+        cur_loss = calc_mse_loss_prepared(mse_terms, generated_signals)
 
         if calc_acceptance(cur_loss, best_loss, iteration,
                            N_iterations_base if (iteration < N_iterations_base and not final_iteration) else N_iterations - N_iterations_base,
@@ -342,6 +368,48 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
                 generated_signals[ls] = old_generated_signals[ls] 
 
     return best_selection_points_per_cluster, best_loss, all_losses
+
+
+def blocked_region_bins(cur_chrom, segment_size_dict=DEFAULT_SEGMENT_SIZE_DICT,
+                        blocked_distance_th=2e5):
+    """The small-scale bin indices detection refuses to place a locus in: the padded telomere bounds
+    and the padded centromere. Padding is `max(blocked_distance_th, segment_size_dict['large'])` on
+    each edge, i.e. one large-scale segment when that is the wider of the two.
+
+    Returns (telomere_block_start, telomere_block_end, centromere_block_start, centromere_block_end)
+    -- the residual search zeroes everything before/after the telomere pair and everything between
+    the centromere pair. Shared with `n_loci_from_spacing` so the seeding budget is derived from
+    exactly the region the search may use.
+    """
+    tel_cen_distance_th = max(blocked_distance_th, segment_size_dict['large'])
+    small = segment_size_dict['small']
+    return (
+        int((TELOMERES_OBSERVED.loc[cur_chrom, 'small']['chrom_start'] + tel_cen_distance_th) / small),
+        int((TELOMERES_OBSERVED.loc[cur_chrom, 'small']['chrom_end'] - tel_cen_distance_th) / small),
+        int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_start'] - tel_cen_distance_th) / small),
+        int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end'] + tel_cen_distance_th) / small),
+    )
+
+
+def n_loci_from_spacing(cur_chrom, spacing, segment_size_dict=DEFAULT_SEGMENT_SIZE_DICT,
+                        blocked_distance_th=2e5):
+    """How many loci to seed on `cur_chrom` at one locus per `spacing` bp of SEARCHABLE sequence.
+
+    Searchable = the padded telomere-to-telomere span minus the padded centromere (`blocked_region_bins`),
+    so blacklisted sequence buys no budget and the density is comparable across chromosomes -- unlike a
+    flat `N_loci`, which seeds chr21's 29 Mb as densely as chr1's 218 Mb. On the acrocentric chromosomes
+    (13/14/15/21/22) the observed span already starts past the centromere, so the centromere block falls
+    outside it and nothing is subtracted twice -- hence the clamped overlap rather than a bare difference.
+
+    This is a BUDGET, not a grid: detection still adds one locus per iteration at the largest remaining
+    residual, so two may land inside one `spacing` window and another window may get none. Never returns
+    less than 1.
+    """
+    tel_start, tel_end, cen_start, cen_end = blocked_region_bins(
+        cur_chrom, segment_size_dict=segment_size_dict, blocked_distance_th=blocked_distance_th)
+    small = segment_size_dict['small']
+    searchable = max(0, tel_end - tel_start) - max(0, min(tel_end, cen_end) - max(tel_start, cen_start))
+    return max(1, int(round(searchable * small / spacing)))
 
 
 @CALC_NEW()
@@ -369,11 +437,9 @@ def detect_tsgs_ogs_for_all_length_scales(
     assert all([x['chrom']==cur_chrom for x in data_per_length_scale.values()]), f'Wrong data_per_length_scale for current chrom {cur_chrom}'
 
     blocked_distance_th_bin = int(blocked_distance_th / segment_size_dict['small'])
-    tel_cen_distance_th = max(blocked_distance_th, segment_size_dict['large'])
-    telomere_block_start = int((TELOMERES_OBSERVED.loc[cur_chrom, 'small']['chrom_start'] + tel_cen_distance_th) / segment_size_dict['small'])
-    telomere_block_end = int((TELOMERES_OBSERVED.loc[cur_chrom, 'small']['chrom_end'] - tel_cen_distance_th) / segment_size_dict['small'])
-    centromere_block_start = int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_start'] - tel_cen_distance_th) / segment_size_dict['small'])
-    centromere_block_end = int((CENTROMERES_OBSERVED.loc[cur_chrom, 'small']['centro_end'] + tel_cen_distance_th) / segment_size_dict['small'])   
+    (telomere_block_start, telomere_block_end,
+     centromere_block_start, centromere_block_end) = blocked_region_bins(
+        cur_chrom, segment_size_dict=segment_size_dict, blocked_distance_th=blocked_distance_th)
 
     if length_scales_for_residuals is None:
         length_scales_for_residuals = np.arange(8).astype(int)
@@ -648,7 +714,10 @@ def rank_loci(
         def _optimize_cluster(cluster_i, iteration, fixed_clusters):
             if cluster_i in fixed_cluster_i:
                 return None, None
-            
+
+            # Seeded per (chrom, iteration, cluster) for deterministic results across parallelization and runs
+            seed_task(derive_seed('rank_loci', cur_chrom, iteration, cluster_i))
+
             cur_selection_points = [[x[cluster_i]] for x in best_selection_points]
             cur_selection_points = copy_list_of_selection_points([list(x) + list(y) for x, y in zip(fixed_clusters, cur_selection_points)])
             cur_selection_points_per_cluster = list(zip(*cur_selection_points))
@@ -842,6 +911,13 @@ def limiting_fitness(
 ):
     log_debug(logger, f'Limiting fitness')
 
+    # A preceding filter can legitimately remove every candidate on a chromosome.
+    # Keep that empty result flowing through the remaining stages instead of calling
+    # reductions such as np.max on zero loci.
+    if not raw_selection_points or not raw_selection_points[0]:
+        logger.warning(f'No loci to limit for {cur_chrom}; returning empty selection points.')
+        return copy_list_of_selection_points(raw_selection_points)
+
     assert all([x['chrom']==cur_chrom for x in data_per_length_scale.values()]), f'Wrong data_per_length_scale for current chrom {cur_chrom}'
 
     if ls_i_to_check is None:
@@ -1032,6 +1108,10 @@ def infer_loci_widths(
     """
     log_debug(logger, f'Inferring locus widths for {cur_chrom}')
 
+    if not final_selection_points or not final_selection_points[0]:
+        logger.warning(f'No loci to size for {cur_chrom}; returning empty locus widths.')
+        return []
+
     assert num_bootstrap_iterations <= N_bootstrap, f'num_bootstrap_iterations ({num_bootstrap_iterations}) cannot be larger than N_bootstrap ({N_bootstrap})'
 
     if loci_results_dir is None:
@@ -1053,6 +1133,7 @@ def infer_loci_widths(
         cur_chrom, data_per_length_scale, final_selection_points, segment_size_dict=segment_size_dict)
 
     def __optimize_for_bootstrap_iteration(bootstrap_iteration, cluster_i):
+        seed_task(derive_seed('infer_loci_widths', cur_chrom, cluster_i, bootstrap_iteration))
         mod_data_per_length_scale = deepcopy(data_per_length_scale)
         for ls_i in range(8):
             ls_key = list(mod_data_per_length_scale.keys())[ls_i]
@@ -1272,6 +1353,7 @@ def filter_loci(
     th_max_abs_fitness=0,
     th_sum_abs_fitness=0,
     th_locus_prominence=10,
+    th_locus_mean_fitness=1,
     th_added_events=0,
     perform_prominence_overlap_check=False,
     n_iterations_optim=100_000,
@@ -1283,6 +1365,10 @@ def filter_loci(
 ):
     
     log_debug(logger, f'Final locus filtering for {cur_chrom}')
+
+    if not final_selection_points or not final_selection_points[0]:
+        logger.warning(f'No loci to filter for {cur_chrom}; returning empty selection points.')
+        return copy_list_of_selection_points(final_selection_points)
 
     if loci_widths is None:
         loci_widths = np.zeros((len(final_selection_points[0]), 200))
@@ -1321,6 +1407,7 @@ def filter_loci(
             th_max_abs_fitness=th_max_abs_fitness,
             th_sum_abs_fitness=th_sum_abs_fitness,
             th_locus_prominence=th_locus_prominence,
+            th_locus_mean_fitness=th_locus_mean_fitness,
             th_added_events=th_added_events,
             prominence_calc_on=prominence_calc_on,
             perform_prominence_overlap_check=perform_prominence_overlap_check
@@ -1434,6 +1521,7 @@ def _identify_loci_to_filter(
     th_max_abs_fitness=1,
     th_sum_abs_fitness=2,
     th_locus_prominence=10,
+    th_locus_mean_fitness=1,
     th_added_events=15,
     prominence_calc_on='conv',
     perform_prominence_overlap_check=False
@@ -1471,6 +1559,11 @@ def _identify_loci_to_filter(
         locus_prominence_bool = np.logical_or(locus_prominence_bool, ~locus_prominence_has_overlap)
     log_debug(logger, f'Removing loci based on locus prominence: {np.sum(~locus_prominence_bool)} out of {len(locus_prominence_bool)} loci')
 
+    ## Filter based on mean directed fitness across length scales
+    mean_directed_fitness = 2*np.maximum(cur_fitness, 0).mean(axis=1)
+    locus_mean_fitness_bool = mean_directed_fitness > th_locus_mean_fitness
+    log_debug(logger, f'Removing loci based on mean directed fitness: {np.sum(~locus_mean_fitness_bool)} out of {len(locus_mean_fitness_bool)} loci')
+
     ## Filter based on added events
     added_events = calc_total_events_per_loci(
         cur_chrom,
@@ -1486,7 +1579,8 @@ def _identify_loci_to_filter(
         max_abs_fitness >= (0 if cur_iteration is not None and cur_iteration==0 else th_max_abs_fitness),
         sum_abs_fitness >= (0 if cur_iteration is not None and cur_iteration==0 else th_sum_abs_fitness),
         total_added_events >= th_added_events,
-        locus_prominence_bool
+        locus_prominence_bool,
+        locus_mean_fitness_bool
     ])
     loci_to_keep = np.where(loci_to_keep_bool)[0]
     loci_to_remove = np.where(~loci_to_keep_bool)[0]
@@ -1613,4 +1707,4 @@ def calc_acceptance(new_loss, current_loss, iteration, max_iter, T_schedule='min
         else:
             raise ValueError(f"Invalid temperature schedule: {T_schedule}")
         
-        return np.random.uniform(0, 1) < acceptance_prob
+        return np_rng().uniform(0, 1) < acceptance_prob

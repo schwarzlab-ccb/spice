@@ -12,15 +12,23 @@ import fstlib
 from spice import config
 from spice.utils import create_full_df_from_diff_df, chrom_id_from_id
 from spice.logging import get_logger, log_debug
+from spice.random_state import np_rng
 from spice.event_inference.fst_assets import get_diploid_fsa, T_forced_WGD
 from spice.event_inference.fsts import fsa_from_string
-from spice.event_inference.data_structures import Diff, FullPaths
+from spice.event_inference.data_structures import Diff, FullPaths, McmcGuardExceeded
 
 sv_matching_threshold = config['params']['sv_matching_threshold']
 diploid_fsa = get_diploid_fsa(total_copy_numbers=False)
 diploid_fsa_total_cn = get_diploid_fsa(total_copy_numbers=True)
 
 logger = get_logger(__name__)
+
+
+def _make_solver_deterministic(solver):
+    """Pin a CP-SAT solver to a reproducible search.
+    """
+    solver.parameters.random_seed = int(np_rng().randint(0, 2 ** 31 - 1))
+    solver.parameters.num_workers = 1
 
 
 def full_paths_from_graph_with_sv(cur_id, is_wgd, sv_data, chrom_segments, chrom,
@@ -66,19 +74,30 @@ def full_paths_from_graph_with_sv(cur_id, is_wgd, sv_data, chrom_segments, chrom
             sv_matching_threshold=sv_matching_threshold,
             total_cn=total_cn,
             **kwargs)
-    unique_events = {i: d for i, d in enumerate(set(item for sublist in diffs for item in sublist))}
+    # WGD + a zero-CN segment: drop DEGENERATE solutions padded with an empty event.
+    _padded = [i for i, diff in enumerate(diffs)
+               if any(x.diff.find('1') == -1 for x in diff)]
+    if _padded and len(_padded) < len(diffs):
+        log_debug(logger, f'{cur_id}: dropping {len(_padded)} of {len(diffs)} solutions padded with '
+                          f'an empty (zero-span) event; {len(diffs) - len(_padded)} clean solutions remain')
+        diffs = [diff for i, diff in enumerate(diffs) if i not in set(_padded)]
+
+    # sorted() is required here for deterministic output
+    unique_events = {i: d for i, d in enumerate(sorted(set(item for sublist in diffs for item in sublist)))}
     unique_events_reversed = {v: k for k, v in unique_events.items()}
     diffs = [[unique_events_reversed[event] for event in diff] for diff in diffs]
     solutions = [Counter(diff) for diff in diffs]
-    # this is necessary because LOHs can create duplicate solutions (e.g. for profile 010)
-    unique_solutions = [Counter({k: v for k, v in x}) for x in {frozenset(c.items()) for c in solutions}]
+    # Creating unique solutions is necessary because LOHs can create duplicate solutions (e.g. for profile 010)
+    # sorted() is required here for deterministic output
+    unique_solutions = [Counter({k: v for k, v in x})
+                        for x in sorted({frozenset(c.items()) for c in solutions}, key=sorted)]
     log_debug(logger, f"Found {len(unique_events)} unique events")
     log_debug(logger, f"Found {len(solutions)} solutions of which {len(unique_solutions)} are unique")
     assert all([solution.total() == (chrom.n_events) for solution in unique_solutions]), f"expected nr of events: {chrom.n_events}. nr of events per solution: {[solution.total() for solution in unique_solutions]}"
 
     if any([event.diff.find('1')==-1 for event in unique_events.values()]):
-        raise ValueError('Invalid empty events found. This usually means that the number of events '
-                         'was calculated incorrectly for WGD samples.')
+        raise ValueError('Invalid empty events found: EVERY solution is padded with a zero-span '
+                         'event, so there is no clean explanation of this profile to fall back on.')
 
     if len(unique_solutions) == 1:
         if sv_selected_events is not None and (chrom.n_events - len(sv_selected_events)) <= 1 and chrom.n_events > 1:
@@ -519,7 +538,7 @@ def create_random_start_end_pairs(starts, ends, n_paths, pre_selected_events=Non
     else:
         pre_selected_events = []
 
-    random_ends = ends[np.argsort(np.random.rand(n_paths, len(ends)), axis=1)]
+    random_ends = ends[np.argsort(np_rng().rand(n_paths, len(ends)), axis=1)]
     events = [pre_selected_events + [(s, e) for s, e in zip(starts, cur_ends)] for cur_ends in random_ends]
 
     return events
@@ -595,7 +614,10 @@ class CpSolverSolutionArray(cp_model.CpSolverSolutionCallback):
 
 
 def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, total_cn=False,
-                                       return_all_solutions=True, shuffle_diffs=True):
+                                       return_all_solutions=True, shuffle_diffs=True,
+                                       raise_on_time_limit=False):
+    """`raise_on_time_limit`: treat a CP-SAT timeout as a reported failure, not as "no solution".
+    """
 
     if len(diffs) == 0:
         logger.warning('Empty diffs passed into loh_filters_for_graph_result_diffs. Returning empty list.')
@@ -613,7 +635,7 @@ def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, t
 
         cur_diff = cur_diff.copy()
         if shuffle_diffs:
-            cur_diff = cur_diff[np.random.choice(np.arange(len(cur_diff)), len(cur_diff), replace=False)]
+            cur_diff = cur_diff[np_rng().choice(np.arange(len(cur_diff)), len(cur_diff), replace=False)]
 
         model = cp_model.CpModel()
         n_events = len(cur_diff)
@@ -716,6 +738,7 @@ def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, t
                 # logger.debug('/////////////') # should be commented out to save time
 
         solver = cp_model.CpSolver()
+        _make_solver_deterministic(solver)
         if single_time_limit is not None:
             solver.parameters.max_time_in_seconds = single_time_limit
         solver_solutions = CpSolverSolutionArray(order, silent=True)
@@ -726,13 +749,22 @@ def loh_filters_for_graph_result_diffs(diffs, profile, single_time_limit=None, t
             solver.solution_limit = 1
         status = solver.Solve(model, solver_solutions)
 
+        # Report a timeout as a failure instead of "no solution found"
+        if raise_on_time_limit and status == cp_model.UNKNOWN:
+            # `n` is the count of boolean enforcement vars built into this model (it starts as the
+            # diff index at the top of the loop, then is reset to 0 and incremented per NewBoolVar)
+            raise McmcGuardExceeded(
+                f'LOH CP-SAT solve exceeded its {single_time_limit}s guard (status UNKNOWN): '
+                f'~{n} boolean enforcement vars over a {len(profile)}-segment profile, and the solver '
+                f'proved nothing within the budget.')
+
         if len(solver_solutions.all_solutions) == 0:
             logger.debug(f'no loh solution found for solution {n}')
             continue
 
         cp_solutions = np.array(solver_solutions.all_solutions)
         if not return_all_solutions:
-            cp_solutions = cp_solutions[np.random.choice(range(len(cp_solutions)), 1)]
+            cp_solutions = cp_solutions[np_rng().choice(range(len(cp_solutions)), 1)]
 
         unique_results = set()
         for cur_solution_ in cp_solutions:
@@ -775,8 +807,8 @@ def loh_filters_for_graph_result_diffs_wgd(
 
     for n, cur_diff in enumerate(diffs):
         if shuffle_diffs:
-            cur_diff = [cur_diff[0][np.random.choice(np.arange(len(cur_diff[0])), len(cur_diff[0]), replace=False)],
-                        cur_diff[1][np.random.choice(np.arange(len(cur_diff[1])), len(cur_diff[1]), replace=False)]]
+            cur_diff = [cur_diff[0][np_rng().choice(np.arange(len(cur_diff[0])), len(cur_diff[0]), replace=False)],
+                        cur_diff[1][np_rng().choice(np.arange(len(cur_diff[1])), len(cur_diff[1]), replace=False)]]
 
         model = cp_model.CpModel()
         n_pre = len(cur_diff[0])
@@ -824,6 +856,7 @@ def loh_filters_for_graph_result_diffs_wgd(
                 model.AddAtLeastOne(loh_fulfilled)
 
         solver = cp_model.CpSolver()
+        _make_solver_deterministic(solver)
         # if single_time_limit is not None:
         #     solver.parameters.max_time_in_seconds = single_time_limit
         solver_solutions = CpSolverSolutionArray(order_pre + order_post, silent=True)
@@ -1020,11 +1053,8 @@ def get_events_for_cur_start_ends_wgd(starts, ends, n_events, cn_profile, total_
                 'post', loh_pos, pre_wgd_diff=pre_wgd_diff, post_wgd_diffs=post_wgd_diffs,
                 post_wgd_state=post_wgd_state, total_cn=total_cn)
             
-            paths.append([(pre_wgd_path, path) for path, valid in zip(post_wgd_paths, post_wgd_valid) if valid])
-            paths = [path for path in paths if len(path) > 0] # remove empty paths
-
-    # slightly faster than paths.extend
-    paths = sum(paths, [])
+            paths.extend((pre_wgd_path, path)
+                         for path, valid in zip(post_wgd_paths, post_wgd_valid) if valid)
 
     return paths
 

@@ -9,18 +9,20 @@ import numpy as np
 
 from spice import config, data_loaders
 from spice.length_scales import DEFAULT_LENGTH_SCALE_BOUNDARIES
-from spice.utils import (open_pickle, save_pickle, CALC_NEW,
-                         calc_telomere_bound_whole_arm_whole_chrom)
+from spice.utils import open_pickle, save_pickle, CALC_NEW
 from spice.logging import log_debug, get_logger
+from spice.random_state import derive_seed, seed_task
 from spice.tsg_og.detection import (
-    collect_data_per_length_scale, detect_tsgs_ogs_for_all_length_scales, rank_loci, within_ci_fitness_filter,
+    collect_data_per_length_scale, detect_tsgs_ogs_for_all_length_scales, n_loci_from_spacing,
+    rank_loci, within_ci_fitness_filter,
     flip_up_down_assignment, final_optimization_step, limiting_fitness, infer_loci_widths, merge_overlapping_loci,
     calc_mse_loss, filter_loci, _optimize_selection_points, SelectionPoints)
 from spice.tsg_og.signal_bootstrap import bootstrap_sampling_of_signal
 from spice.tsg_og.simulation import copy_list_of_selection_points, convolution_simulation_per_ls
-from spice.tsg_og.plateaus import categorize_events_by_plateau_overlap
+from spice.loci_preprocessing import process_final_events_for_loci_routines
 from spice.tsg_og.loci import (
     create_loci_df, assign_p_values, calculate_events_per_loci_df)
+from spice.tsg_og.permutation import fitness_statistic
 
 if sys.version_info >= (3, 9):
     from importlib.resources import files
@@ -33,12 +35,34 @@ else:
 logger = get_logger('loci_detection_main')
 CHROMS = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
 
+#: Stages whose persisted pickle holds the producing function's WHOLE return tuple, while the
+#: in-memory RESULTS entry is only its first element (the per-length-scale selection points):
+#:   detection               -> (selection_points, _, _)
+#:   optimizing_intermediate -> (selection_points, all_losses)      [final_optimization_step]
+#:   merging                 -> (selection_points, conv, removed, to_remove)
+#:   optimizing              -> (selection_points, _)               [final_optimization_step]
+#: CALC_NEW pickles the return value, so a run that RESUMES one of these from disk must unwrap it;
+#: a run that reaches it in the same process never does, because the assignment already unpacked.
+#: Missing the unwrap does not fail where it happens -- the next stage receives the 8-element outer
+#: tuple where it expects the tracks, and dies confusingly, e.g. `spice loci_detection --chrom chr21
+#: --loci-steps filter_loci_intermediate_1` reporting "Number of locus widths (16) does not match
+#: number of selection points (8)", the 8 being the number of LENGTH SCALES rather than loci.
+_STAGES_PICKLED_AS_TUPLE = frozenset({'detection', 'optimizing_intermediate', 'merging', 'optimizing'})
+
+
+def _load_stage(output_dir, filenames, stage):
+    """Load one persisted detection stage, unwrapping the stages saved as a return tuple."""
+    obj = open_pickle(os.path.join(output_dir, filenames[stage]))
+    return obj[0] if stage in _STAGES_PICKLED_AS_TUPLE else obj
+
+
 def run_loci_detection_per_chrom(
     final_events_df,
     cur_chrom,
     which='full',
     name=None,
     N_loci=100,
+    N_loci_spacing=None,
     overwrite=False,
     overwrite_preprocessing=False,
     loci_results_dir=None,
@@ -62,7 +86,8 @@ def run_loci_detection_per_chrom(
     filter_N_iterations_optim=100_000,
     final_limiting_N_iterations_optim=10_000,
     N_bootstrap_for_widths=200,
-    th_locus_prominence=5
+    th_locus_prominence=5,
+    th_locus_mean_fitness=1
 ):
     """
     Run the loci detection pipeline for a given chromosome.
@@ -77,6 +102,11 @@ def run_loci_detection_per_chrom(
         Project name (from config if not provided)
     N_loci : int, default=100
         Number of loci to detect
+    N_loci_spacing : float or None, default=None
+        If set, seed one locus per this many bp of SEARCHABLE sequence (padded telomere-to-telomere
+        span minus the padded centromere) instead of a flat `N_loci`, via
+        `detection.n_loci_from_spacing`. Makes the candidate density comparable across chromosomes;
+        a flat count seeds chr21's 29 Mb as densely as chr1's 218 Mb. Overrides `N_loci`.
     loci_results_dir : str, optional
         Output directory (auto-generated if not provided)
     overwrite_preprocessing : bool, default=False
@@ -99,8 +129,14 @@ def run_loci_detection_per_chrom(
         Number of iterations for ranking
     th_locus_prominence : float, default=5
         Threshold for locus prominence filtering
+    th_locus_mean_fitness : float, default=1
+        Threshold for the mean directed fitness post-processing filter
     """
     
+    # Each stochastic stage below also gets its own stream: preceding stages and
+    # preprocessing may run, load from cache, or be skipped during a resumed run.
+    seed_task(derive_seed('loci_detection', cur_chrom))
+
     # Define all available steps
     which_options = [
         'detection',
@@ -155,6 +191,13 @@ def run_loci_detection_per_chrom(
     
     output_dir = os.path.join(loci_results_dir, 'detection', cur_chrom)
        
+    if N_loci_spacing:
+        # One locus per N_loci_spacing bp of searchable sequence, derived from the same blocked
+        # regions the residual search uses (see detection.n_loci_from_spacing).
+        N_loci_flat, N_loci = N_loci, n_loci_from_spacing(
+            cur_chrom, N_loci_spacing, blocked_distance_th=detection_blocked_distance_th)
+        logger.info(f'N_loci from spacing: one locus per {N_loci_spacing/1e6:g} Mb of searchable '
+                    f'sequence on {cur_chrom} -> {N_loci} loci (flat N_loci={N_loci_flat} ignored)')
     logger.info(f'Running loci detection for chrom={cur_chrom}, name={name} and a maximum of {N_loci} loci.')
     logger.info(f'Steps to run: {" - ".join(which_steps)}')
     logger.info(f'Output will be saved to {output_dir}')
@@ -187,6 +230,7 @@ def run_loci_detection_per_chrom(
     
     # Detection step
     if 'detection' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'detection'))
         logger.info(f'Running detection')
         log_debug(logger, f'Output: {output_dir}/{filenames["detection"]}')
         
@@ -206,11 +250,12 @@ def run_loci_detection_per_chrom(
     
     # Flipping step
     if 'flipping' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'flipping'))
         logger.info(f'Running flipping')
         log_debug(logger, f'Output: {output_dir}/{filenames["flipping"]}')
         
         if RESULTS['detection'] is None:
-            RESULTS['detection'], _, _ = open_pickle(os.path.join(output_dir, filenames['detection']))
+            RESULTS['detection'] = _load_stage(output_dir, filenames, 'detection')
         
         RESULTS['flipping'] = flip_up_down_assignment(
             cur_chrom=cur_chrom,
@@ -224,11 +269,12 @@ def run_loci_detection_per_chrom(
     
     # Ranking step
     if 'ranking' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'ranking'))
         logger.info(f'Running ranking')
         log_debug(logger, f'Output: {output_dir}/{filenames["ranking"]}')
         
         if RESULTS['flipping'] is None:
-            RESULTS['flipping'] = open_pickle(os.path.join(output_dir, filenames['flipping']))
+            RESULTS['flipping'] = _load_stage(output_dir, filenames, 'flipping')
         
         if use_original_rank:
             logger.info(f'Using original rank from detection. Skipping rank_loci() function.')
@@ -251,13 +297,14 @@ def run_loci_detection_per_chrom(
     
     # Within CI filtering step
     if 'within_ci_filtering' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'within_ci_filtering'))
         logger.info(f'Running within_ci_filtering')
         log_debug(logger, f'Output: {output_dir}/{filenames["within_ci_filtering"]}')
         
         if RESULTS['ranking'] is None:
             if use_original_rank:
                 if RESULTS['flipping'] is None:
-                    RESULTS['flipping'] = open_pickle(os.path.join(output_dir, filenames['flipping']))
+                    RESULTS['flipping'] = _load_stage(output_dir, filenames, 'flipping')
                 RESULTS['ranking'] = copy_list_of_selection_points(RESULTS['flipping'])
             else:
                 ranking_locus_iterations = open_pickle(os.path.join(output_dir, filenames['ranking']))
@@ -275,11 +322,12 @@ def run_loci_detection_per_chrom(
     
     # Limiting step
     if 'limiting' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'limiting'))
         logger.info(f'Running limiting')
         log_debug(logger, f'Output: {output_dir}/{filenames["limiting"]}')
         
         if RESULTS['within_ci_filtering'] is None:
-            RESULTS['within_ci_filtering'] = open_pickle(os.path.join(output_dir, filenames['within_ci_filtering']))
+            RESULTS['within_ci_filtering'] = _load_stage(output_dir, filenames, 'within_ci_filtering')
         
         RESULTS['limiting'] = limiting_fitness(
             cur_chrom=cur_chrom,
@@ -298,11 +346,12 @@ def run_loci_detection_per_chrom(
     
     # Optimizing intermediate step
     if 'optimizing_intermediate' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'optimizing_intermediate'))
         logger.info(f'Running optimizing_intermediate')
         log_debug(logger, f'Output: {output_dir}/{filenames["optimizing_intermediate"]}')
         
         if RESULTS['limiting'] is None:
-            RESULTS['limiting'] = open_pickle(os.path.join(output_dir, filenames['limiting']))
+            RESULTS['limiting'] = _load_stage(output_dir, filenames, 'limiting')
         
         RESULTS['optimizing_intermediate'], all_losses = final_optimization_step(
             cur_chrom=cur_chrom,
@@ -316,11 +365,12 @@ def run_loci_detection_per_chrom(
     
     # locus widths intermediate step
     if 'loci_widths_intermediate' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'loci_widths_intermediate'))
         logger.info(f'Running loci_widths_intermediate')
         log_debug(logger, f'Output: {output_dir}/{filenames["loci_widths_intermediate"]}')
         
         if RESULTS['optimizing_intermediate'] is None:
-            RESULTS['optimizing_intermediate'] = open_pickle(os.path.join(output_dir, filenames['optimizing_intermediate']))
+            RESULTS['optimizing_intermediate'] = _load_stage(output_dir, filenames, 'optimizing_intermediate')
         
         RESULTS['loci_widths_intermediate'] = infer_loci_widths(
             cur_chrom=cur_chrom,
@@ -338,14 +388,15 @@ def run_loci_detection_per_chrom(
     
     # Merging step
     if 'merging' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'merging'))
         logger.info(f'Running merging')
         log_debug(logger, f'Output: {output_dir}/{filenames["merging"]}')
         
         if RESULTS['optimizing_intermediate'] is None:
-            RESULTS['optimizing_intermediate'] = open_pickle(os.path.join(output_dir, filenames['optimizing_intermediate']))
+            RESULTS['optimizing_intermediate'] = _load_stage(output_dir, filenames, 'optimizing_intermediate')
         
         if RESULTS['loci_widths_intermediate'] is None:
-            RESULTS['loci_widths_intermediate'] = open_pickle(os.path.join(output_dir, filenames['loci_widths_intermediate']))
+            RESULTS['loci_widths_intermediate'] = _load_stage(output_dir, filenames, 'loci_widths_intermediate')
         
         RESULTS['merging'], merged_conv, removed_loci, loci_to_remove = merge_overlapping_loci(
             cur_chrom=cur_chrom,
@@ -360,13 +411,14 @@ def run_loci_detection_per_chrom(
     
     # Optimizing step
     if 'optimizing' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'optimizing'))
         logger.info(f'Running optimizing')
         log_debug(logger, f'Output: {output_dir}/{filenames["optimizing"]}')
         
         input_source = 'flipping' if which == 'fast' else 'merging'
 
         if RESULTS[input_source] is None:
-            RESULTS[input_source] = open_pickle(os.path.join(output_dir, filenames[input_source]))
+            RESULTS[input_source] = _load_stage(output_dir, filenames, input_source)
    
         RESULTS['optimizing'], _ = final_optimization_step(
             cur_chrom=cur_chrom,
@@ -380,11 +432,12 @@ def run_loci_detection_per_chrom(
     
     # locus widths intermediate 2 step
     if 'loci_widths_intermediate_2' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'loci_widths_intermediate_2'))
         logger.info(f'Running loci_widths_intermediate_2')
         log_debug(logger, f'Output: {output_dir}/{filenames["loci_widths_intermediate_2"]}')
         
         if RESULTS['optimizing'] is None:
-            RESULTS['optimizing'] = open_pickle(os.path.join(output_dir, filenames['optimizing']))
+            RESULTS['optimizing'] = _load_stage(output_dir, filenames, 'optimizing')
         
         RESULTS['loci_widths_intermediate_2'] = infer_loci_widths(
             cur_chrom=cur_chrom,
@@ -402,13 +455,14 @@ def run_loci_detection_per_chrom(
     
     # Filter loci intermediate 1 step
     if 'filter_loci_intermediate_1' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'filter_loci_intermediate_1'))
         logger.info(f'Running filter_loci_intermediate_1')
         log_debug(logger, f'Output: {output_dir}/{filenames["filter_loci_intermediate_1"]}')
         
         if RESULTS['loci_widths_intermediate_2'] is None:
-            RESULTS['loci_widths_intermediate_2'] = open_pickle(os.path.join(output_dir, filenames['loci_widths_intermediate_2']))
+            RESULTS['loci_widths_intermediate_2'] = _load_stage(output_dir, filenames, 'loci_widths_intermediate_2')
         if RESULTS['optimizing'] is None:
-            RESULTS['optimizing'] = open_pickle(os.path.join(output_dir, filenames['optimizing']))
+            RESULTS['optimizing'] = _load_stage(output_dir, filenames, 'optimizing')
         
         RESULTS['filter_loci_intermediate_1'] = filter_loci(
             cur_chrom=cur_chrom,
@@ -419,18 +473,26 @@ def run_loci_detection_per_chrom(
             n_iterations_optim=filter_N_iterations_optim,
             show_progress_optim=False,
             max_deviation_optim=0.00001,
+            # Both thresholds must be passed here as well as to final_filter_loci below: without
+            # them this call silently used filter_loci's own signature defaults, so configuring
+            # either key changed only the final stage. That is the smaller one -- on TCGA this
+            # intermediate filter culls 1896 -> 989 loci against final_filter_loci's 989 -> 928, so
+            # the un-plumbed stage governed ~15x as many loci as the configurable one.
+            th_locus_prominence=th_locus_prominence,
+            th_locus_mean_fitness=th_locus_mean_fitness,
             calc_new_force_new=overwrite,
             calc_new_filename=os.path.join(output_dir, filenames['filter_loci_intermediate_1']))
     
     # Final within CI filtering step
     if 'final_within_ci_filtering' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'final_within_ci_filtering'))
         logger.info(f'Running final_within_ci_filtering')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_within_ci_filtering"]}')
         
         input_source = 'optimizing' if which == 'fast' else 'filter_loci_intermediate_1'
         
         if RESULTS[input_source] is None:
-            RESULTS[input_source] = open_pickle(os.path.join(output_dir, filenames[input_source]))
+            RESULTS[input_source] = _load_stage(output_dir, filenames, input_source)
         
         RESULTS['final_within_ci_filtering'] = within_ci_fitness_filter(
             cur_chrom=cur_chrom,
@@ -445,11 +507,12 @@ def run_loci_detection_per_chrom(
     
     # Final filter loci step
     if 'final_filter_loci' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'final_filter_loci'))
         logger.info(f'Running final_filter_loci')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_filter_loci"]}')
         
         if RESULTS['final_within_ci_filtering'] is None:
-            RESULTS['final_within_ci_filtering'] = open_pickle(os.path.join(output_dir, filenames['final_within_ci_filtering']))
+            RESULTS['final_within_ci_filtering'] = _load_stage(output_dir, filenames, 'final_within_ci_filtering')
         
         RESULTS['final_filter_loci'] = filter_loci(
             cur_chrom=cur_chrom,
@@ -461,16 +524,18 @@ def run_loci_detection_per_chrom(
             show_progress_optim=False,
             max_deviation_optim=0.00001,
             th_locus_prominence=th_locus_prominence,
+            th_locus_mean_fitness=th_locus_mean_fitness,
             calc_new_force_new=overwrite,
             calc_new_filename=os.path.join(output_dir, filenames['final_filter_loci']))
-    
+
     # Final limiting step
     if 'final_limiting' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'final_limiting'))
         logger.info(f'Running final_limiting')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_limiting"]}')
         
         if RESULTS['final_filter_loci'] is None:
-            RESULTS['final_filter_loci'] = open_pickle(os.path.join(output_dir, filenames['final_filter_loci']))
+            RESULTS['final_filter_loci'] = _load_stage(output_dir, filenames, 'final_filter_loci')
         
         RESULTS['final_limiting'] = limiting_fitness(
             cur_chrom=cur_chrom,
@@ -495,18 +560,19 @@ def run_loci_detection_per_chrom(
     else:
         if 'final_filter_loci' in which_steps and 'final_limiting' not in which_steps:
             if RESULTS['final_filter_loci'] is None:
-                RESULTS['final_filter_loci'] = open_pickle(os.path.join(output_dir, filenames['final_filter_loci']))
+                RESULTS['final_filter_loci'] = _load_stage(output_dir, filenames, 'final_filter_loci')
             RESULTS['final_selection_points'] = copy_list_of_selection_points(RESULTS['final_filter_loci'])
             save_pickle(RESULTS['final_selection_points'], os.path.join(output_dir, filenames['final_selection_points']))
 
 
     # Final locus widths step
     if 'final_loci_widths' in which_steps:
+        seed_task(derive_seed('loci_detection', cur_chrom, 'final_loci_widths'))
         logger.info(f'Running final_loci_widths')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_loci_widths"]}')
         
         if RESULTS['final_selection_points'] is None:
-            RESULTS['final_selection_points'] = open_pickle(os.path.join(output_dir, filenames['final_selection_points']))
+            RESULTS['final_selection_points'] = _load_stage(output_dir, filenames, 'final_selection_points')
         
         RESULTS['final_loci_widths'] = infer_loci_widths(
             cur_chrom=cur_chrom,
@@ -528,7 +594,7 @@ def run_loci_detection_per_chrom(
     #     log_debug(logger, f'Output: {output_dir}/{filenames["one_by_one"]}')
         
     #     if RESULTS['final_selection_points'] is None:
-    #         RESULTS['final_selection_points'] = open_pickle(os.path.join(output_dir, filenames['final_selection_points']))
+    #         RESULTS['final_selection_points'] = _load_stage(output_dir, filenames, 'final_selection_points')
         
     #     RESULTS['one_by_one'] = add_loci_one_by_one(
     #         cur_chrom=chrom,
@@ -545,16 +611,14 @@ def run_loci_detection_per_chrom(
 def combine_loci(
     loci_results_dir: str,
     processed_events: Optional[pd.DataFrame] = None,
-    p_values_N_random: int = 10_000,
-    p_values_N_iterations: int = 1_000,
     calculate_p_value: bool = False,
     p_value_threshold: float = 0.05,
-    p_values_mode: str = 'random',
-    p_values_optimize_ls_separately: bool = False,
-    p_value_cores: int = 1,
+    mean_fitness_threshold: Optional[float] = None,
+    permutation_null: Optional[pd.DataFrame] = None,
+    p_values_strategy: str = 'zpool',
     overwrite: bool = False,
     mode: str = 'detection',
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, Dict, Dict, pd.DataFrame]:
     """
     Combine results from all chromosomes after loci detection or assignment
     
@@ -628,234 +692,70 @@ def combine_loci(
     
     if calculate_p_value:
         from spice.length_scales import LENGTH_SCALE_NAMES
-        data_per_length_scale_dirs = os.path.join(loci_results_dir, 'data_per_length_scale')
-        all_data_per_length_scale = {c: open_pickle(os.path.join(data_per_length_scale_dirs, f'{c}.pickle'))
-                    for c in loci_df['chrom'].unique()
-                    if os.path.exists(os.path.join(data_per_length_scale_dirs, f'{c}.pickle'))}
-        final_loci_df = assign_p_values(
-            loci_df, N_random=p_values_N_random, n_iterations_optim=p_values_N_iterations,
-            output_dir=loci_results_dir, data_per_length_scale=all_data_per_length_scale,
-            overwrite=False, mode=p_values_mode, optimize_ls_separately=p_values_optimize_ls_separately,
-            n_jobs=p_value_cores)
+        if permutation_null is None or not len(permutation_null):
+            raise ValueError(
+                'calculate_p_value=True needs a permutation null. Build one with `spice permute` '
+                '(or let loci detection build it inline) -- see spice.tsg_og.permutation.')
+        final_loci_df = assign_p_values(loci_df, permutation_null, strategy=p_values_strategy)
         # assign_p_values: p_value_raw = raw p, p_value = BH-FDR q. Remap to canonical raw p / FDR q.
         final_loci_df['q_value'] = final_loci_df['p_value']
         final_loci_df['p_value'] = final_loci_df.pop('p_value_raw')
         for ls in LENGTH_SCALE_NAMES:
             final_loci_df[f'q_value_{ls}'] = final_loci_df.pop(f'p_value_{ls}')      # BH-FDR per scale
             final_loci_df[f'p_value_{ls}'] = final_loci_df.pop(f'p_value_raw_{ls}')  # raw per scale
-        # Filter to significant loci (q_value < threshold): drop rows AND the matching selection points /
-        # widths (indexed per chromosome by rank_on_chrom, which numbers a chromosome's loci 0..n-1).
+        # The table BEFORE any drop -- returned so the caller can persist it. The calibration figures
+        # (QQ, cumulative, p-value histograms, length-scale coherence) need every detected locus with
+        # its p/q; reading them off a table filtered to the significant subset measures the threshold
+        # rather than the calibration.
+        unfiltered_loci_df = final_loci_df.copy()
+
+        # BOTH post-null drops, applied together so the selection points and widths stay in step with
+        # the table. They are deliberately here and not in detection:
+        #   q_value          -- significance against the permutation null.
+        #   mean fitness     -- an ABSOLUTE floor on the same statistic the p-value ranks
+        #                       (permutation.fitness_statistic). spice also has a detection-time
+        #                       version of this, `th_locus_mean_fitness`; applying it THERE also
+        #                       filters the permutation null, because the null is built by re-running
+        #                       detection on permuted events, and a null exists to produce weak loci.
+        #                       Measured on HMF: the null collapsed 13,964 -> 1,311 loci with 32 of 46
+        #                       (chrom,direction) strata empty and nothing could be scored. Applied
+        #                       here the null is intact and this selects among scored loci.
         n_before = len(final_loci_df)
+        fit = fitness_statistic(final_loci_df)
+        keep_all = (final_loci_df['q_value'].to_numpy() < p_value_threshold)
+        if mean_fitness_threshold is not None:
+            keep_all &= (fit > mean_fitness_threshold)
+        final_loci_df = final_loci_df.assign(_keep=keep_all)
         filtered_selection_points = dict()
         filtered_loci_widths = dict()
         for cur_chrom in list(all_selection_points.keys()):
-            keep = final_loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom')['q_value'].to_numpy() < p_value_threshold
+            keep = (final_loci_df.query('chrom == @cur_chrom')
+                                 .sort_values('rank_on_chrom')['_keep'].to_numpy())
             filtered_selection_points[cur_chrom] = [
                 [x for i, x in enumerate(track) if keep[i]] for track in all_selection_points[cur_chrom]]
             filtered_loci_widths[cur_chrom] = [
                 x for i, x in enumerate(all_loci_widths[cur_chrom]) if keep[i]]
-        final_loci_df = final_loci_df[final_loci_df['q_value'] < p_value_threshold].reset_index(drop=True)
-        logger.info(f'Assigned fitness p/q via assign_p_values (global BH-FDR; p_value = raw, '
-                    f'q_value = BH-FDR q) and kept {len(final_loci_df)}/{n_before} loci with q_value < {p_value_threshold}')
+        final_loci_df = final_loci_df[final_loci_df['_keep']].drop(columns='_keep').reset_index(drop=True)
+        cut = f'q_value < {p_value_threshold}' + (
+            f' and mean fitness > {mean_fitness_threshold}' if mean_fitness_threshold is not None else '')
+        logger.info(f'Assigned fitness p/q from the permutation null (global BH-FDR; p_value = raw, '
+                    f'q_value = BH-FDR q) and kept {len(final_loci_df)}/{n_before} loci with {cut}')
     else:
-        # Skip p-value filtering and use all loci
+        # Skip p-value filtering and use all loci. `final_loci_df` must still be bound here --
+        # only the branch above promotes `loci_df` to it, so without this the shared log/return
+        # below raised UnboundLocalError and `combine` was unusable whenever the p-value was off.
+        # The path was dead until now: the CLI reads calculate_p_value from the config
+        # (cli.py: calc_p) and passes it straight through, and the pipeline's loci.yaml always
+        # sets it true, so only a config that turns the p-value off reaches this.
         logger.info('Skipping p-value filtering (calculate_p_value=False)')
+        final_loci_df = loci_df
+        unfiltered_loci_df = loci_df
         filtered_selection_points = all_selection_points
         filtered_loci_widths = all_loci_widths
 
     log_debug(logger, f'Final loci dataframe: {len(final_loci_df)} loci across {final_loci_df["chrom"].nunique()} chromosomes')   
-    return final_loci_df, filtered_selection_points, filtered_loci_widths
+    return final_loci_df, filtered_selection_points, filtered_loci_widths, unfiltered_loci_df
 
-
-def process_final_events_for_loci_routines(
-    final_events_df: Optional[pd.DataFrame] = None,
-    length_scale_boundaries: Dict[str, Tuple[float, float]] = DEFAULT_LENGTH_SCALE_BOUNDARIES,
-    remove_plateaus: bool = True,
-    remove_chrY: bool = True,
-    drop_duplicates: bool = True,
-    use_observed_centromeres: bool = True,
-    skip_assertions: bool = False,
-) -> pd.DataFrame:
-    """
-    Process and filter copy-number events for loci detection analysis.
-    
-    This function performs comprehensive preprocessing of final events including:
-    - Filtering by chromosome and telomere/centromere boundaries
-    - Re-calculating event positions relative to centromeres and telomeres
-    - Removing whole chromosome/arm events and keeping internal events
-    - Filtering by event width within length scale boundaries
-    - Removing duplicate events and plateau-overlapping events
-    - Using observed centromere positions for improved classification
-    
-    Parameters
-    ----------
-    final_events_df : pd.DataFrame, optional
-        DataFrame of final events. If None, loads from default location.
-    length_scale_boundaries : dict
-        Dictionary mapping length scale names to (min, max) width tuples.
-    remove_plateaus : bool, default=True
-        Whether to remove events overlapping copy-number plateaus.
-    remove_chrY : bool, default=True
-        Whether to exclude chrY events from analysis.
-    drop_duplicates : bool, default=True
-        Whether to remove duplicate event entries.
-    use_observed_centromeres : bool, default=True
-        Whether to use empirically observed centromere positions for classification.
-    skip_assertions : bool, default=False
-        Whether to skip data quality assertions (for debugging).
-    
-    Returns
-    -------
-    pd.DataFrame
-        Filtered and processed events dataframe containing only internal events
-        within the specified length scale boundaries, with updated position
-        classifications and centromere/telomere annotations.
-    """
-
-    CENTROMERES_OBSERVED = data_loaders.load_centromeres(observed=True, extended=False)
-
-    if final_events_df is None:
-        log_debug(logger, "Loading final events dataframe from file")
-        final_events_df = data_loaders.load_final_events()
-
-    raw_length = len(final_events_df)
-
-    log_debug(logger, f"Loaded {len(final_events_df)} events events across {final_events_df['sample'].nunique()} samples and {final_events_df['id'].nunique()} IDs")
-    
-    if remove_chrY:
-        final_events_df = final_events_df.query('chrom != "chrY"').reset_index(drop=True).copy()
-
-    # Remove IDs where the number of events does not match
-    valid_ids = (final_events_df.groupby('id').size().loc[
-        (final_events_df.groupby('id').size() ==
-        final_events_df.groupby('id')['events_per_chrom'].first())].index.values)
-    if len(valid_ids) < final_events_df['id'].nunique():
-        logger.warning(f'Found {final_events_df["id"].nunique() - len(valid_ids)} IDs ({100*(final_events_df["id"].nunique() - len(valid_ids)) / final_events_df["id"].nunique():.4f}%) with inconsistent number of events')
-        final_events_df = final_events_df.query('id in @valid_ids').copy()
-        log_debug(logger, 'Removed invalid IDs, where the number of events did not match "events_per_chrom"')
-        log_debug(logger, f'Events now have: {final_events_df["sample"].nunique()} samples, {final_events_df["id"].nunique()} IDs and {len(final_events_df)} events')
-
-    final_events_df = final_events_df.loc[~final_events_df['telomere_bound']].reset_index(drop=True).copy()
-
-    # Re-calculate centromere/telomere/whole arm/whole chrom assignment and only keep internal events
-    final_events_df = final_events_df.join(data_loaders.load_centromeres(extended=True), on='chrom')
-    final_events_df[
-        ['centromere_bound_l', 'centromere_bound_r', 'telomere_bound_l',
-        'telomere_bound_r', 'telomere_bound', 'whole_arm', 'whole_chrom']] = np.stack(
-            calc_telomere_bound_whole_arm_whole_chrom(final_events_df, return_left_and_right=True), axis=1)
-    
-    # Adjust start/end, especially important for chrX where the telomere assignment is off
-    final_events_df.loc[final_events_df['telomere_bound_l'], 'start'] = 0
-    final_events_df.loc[final_events_df['telomere_bound_r'], 'end'] = final_events_df.loc[
-        final_events_df['telomere_bound_r'], 'chrom_length']
-
-    final_events_df['whole_arm'] = final_events_df.eval('(telomere_bound_l and centromere_bound_r) or (telomere_bound_r and centromere_bound_l)')
-    final_events_df.loc[final_events_df.query('whole_chrom').index, 'whole_arm'] = False
-
-    final_events_df['centromere_bound'] = np.logical_or(final_events_df['centromere_bound_l'].values, final_events_df['centromere_bound_r'].values)
-    final_events_df['whole_centromere'] = np.logical_and(final_events_df['centromere_bound_l'].values, final_events_df['centromere_bound_r'].values)
-
-    # Check whether any event is within 1Mbp of the centromere and remove them
-    # Note that observed centromeres are removed in create_features_pipeline
-    log_debug(logger, 'Remove whole centromere events and events within 1Mbp of the centromere')
-    centromeres = data_loaders.load_centromeres(extended=True)
-    final_events_df = (final_events_df
-        .drop(columns=['centro_start', 'centro_end'], errors='ignore')
-        .join(centromeres, on='chrom'))
-    centromeres_pad = data_loaders.load_centromeres(extended=True, pad=5e6).rename(
-        columns={'centro_start': 'centro_start_pad', 'centro_end': 'centro_end_pad'})
-    final_events_df = (final_events_df
-        .drop(columns=['centro_start_pad', 'centro_end_pad'], errors='ignore')
-        .join(centromeres_pad, on='chrom'))
-    final_events_df['inside_centromere'] = final_events_df.eval('start>=centro_start_pad-2 and end<=centro_end_pad+2')    
-    
-    final_events_df = final_events_df.query('not whole_centromere and not inside_centromere').drop(columns=['whole_centromere', 'inside_centromere']).copy()
-    assert len(final_events_df) > 0, 'No events left after removing whole centromeres and events within 1Mbp of the centromere. Please check the centromere definitions and event coordinates.'
-    log_debug(logger, f'Events now have: {final_events_df["sample"].nunique()} samples, {final_events_df["id"].nunique()} IDs and {len(final_events_df)} events')
-
-    short_chroms = ['chr13', 'chr14', 'chr15', 'chr21', 'chr22']
-    final_events_df['short_arm'] = False
-    final_events_df.loc[final_events_df.query('chrom in @short_chroms').index, 'short_arm'] = True
-    final_events_df.loc[final_events_df.query('chrom in @short_chroms and whole_arm').index, 'whole_chrom'] = True
-    final_events_df.loc[final_events_df.query('chrom in @short_chroms and whole_arm').index, 'whole_arm'] = False
-    final_events_df.loc[final_events_df.query('chrom in @short_chroms and telomere_bound_r and start <= centro_end_pad+2').index, 'whole_chrom'] = True
-
-    # Events that are within 0.95-1.05 of the arm size are considered whole arm
-    telomere_bound_events = final_events_df.query('telomere_bound and not whole_chrom and not whole_arm').copy()
-    telomere_bound_events['left_bound'] = telomere_bound_events.eval('start <= 100000')
-    telomere_bound_events['right_bound'] = telomere_bound_events.eval('end >= chrom_length - 100000')
-    telomere_bound_events.loc[telomere_bound_events['chrom'].isin(short_chroms), 'left_bound'] = telomere_bound_events.loc[telomere_bound_events['chrom'].isin(short_chroms)].eval('start <= centro_end')
-    telomere_bound_events['arm_size'] = telomere_bound_events['centro_start']
-    telomere_bound_events.loc[telomere_bound_events['right_bound'], 'arm_size'] = telomere_bound_events.loc[telomere_bound_events['right_bound'], 'chrom_length'] - telomere_bound_events.loc[telomere_bound_events['right_bound'], 'centro_end']
-    telomere_bound_events.loc[telomere_bound_events['chrom'].isin(short_chroms), 'arm_size'] = telomere_bound_events.loc[telomere_bound_events['chrom'].isin(short_chroms), 'chrom_length'] - telomere_bound_events.loc[telomere_bound_events['chrom'].isin(short_chroms), 'centro_end']
-    telomere_bound_events['within_arm'] = telomere_bound_events['width'] < telomere_bound_events['arm_size']
-    telomere_bound_events['width_norm'] = telomere_bound_events['width'] / telomere_bound_events['arm_size']
-    whole_chrom_indices = telomere_bound_events.query('(left_bound and right_bound)').index.values
-    whole_arm_indices = telomere_bound_events.query('not (left_bound and right_bound) and width_norm > 0.95 and width_norm < 1.05').index.values
-    final_events_df.loc[whole_chrom_indices, ['whole_chrom']] = True
-    final_events_df.loc[whole_arm_indices, ['whole_arm']] = True
-
-    final_events_df['pos'] = final_events_df.apply(
-        lambda x: 'whole_chrom' if x['whole_chrom'] else 'whole_arm' if x['whole_arm'] else
-        'centromere_bound' if x['centromere_bound'] else 'telomere_bound' if x['telomere_bound'] else 'internal', axis=1)
-
-    # Refine centromere-bound classification using empirically observed centromere positions per length scale
-    # This improves upon the theoretical centromere definitions by using data-driven boundaries
-    if use_observed_centromeres:
-        old_n_centromere = (final_events_df['pos'] == 'centromere_bound').sum()
-        for cur_chrom in final_events_df['chrom'].unique():
-            for cur_length_scale in ['small', 'mid1', 'mid2', 'large']:
-                cur_length_scale_border = length_scale_boundaries[cur_length_scale]
-                cur_events = final_events_df.query('chrom == @cur_chrom and pos == "internal" and width > @cur_length_scale_border[0] and width <= @cur_length_scale_border[1]')
-                is_centromere_bound_new = (
-                    ((cur_events['start']>=CENTROMERES_OBSERVED[cur_length_scale].loc[cur_chrom, 'centro_start']) & (cur_events['start']<=CENTROMERES_OBSERVED[cur_length_scale].loc[cur_chrom, 'centro_end'])) |
-                    ((cur_events['end']>=CENTROMERES_OBSERVED[cur_length_scale].loc[cur_chrom, 'centro_start']) & (cur_events['end']<=CENTROMERES_OBSERVED[cur_length_scale].loc[cur_chrom, 'centro_end'])))
-                
-                cur_ind = cur_events.loc[(is_centromere_bound_new & ~cur_events['telomere_bound'])].index
-
-                final_events_df.loc[cur_ind, 'pos'] = 'centromere_bound'
-
-        new_n_centromere = (final_events_df['pos'] == 'centromere_bound').sum()
-        log_debug(logger, f'Assigned {new_n_centromere - old_n_centromere} new events as centromere bound using observed centromeres')
-
-    # Filter to only internal events within the specified length scale boundaries
-    # This removes whole chromosome, whole arm, centromere-bound, and telomere-bound events
-    old_n = len(final_events_df)
-    min_width = DEFAULT_LENGTH_SCALE_BOUNDARIES['small'][0]
-    max_width = DEFAULT_LENGTH_SCALE_BOUNDARIES['large'][1]
-    final_events_df = final_events_df.query('pos == "internal" and width >= @min_width and width <= @max_width').copy()
-    log_debug(logger, f'Only kept internal events: {len(final_events_df)} remaining (dropped {old_n - len(final_events_df)})')
-
-    assert skip_assertions or not final_events_df.isna().sum().any()
-
-    # Remove duplicate entries to only get unique events
-    if drop_duplicates:
-        old_len = len(final_events_df)
-        final_events_df = final_events_df.drop_duplicates(['id', 'chrom', 'type', 'start', 'end'], keep='first').copy()
-        log_debug(logger, f'Dropped {old_len - len(final_events_df)} duplicates -> {len(final_events_df)} events')
-
-    final_events_df = final_events_df.reset_index(drop=True).copy()
-
-    # Remove plateau events
-    final_events_df['plateau'] = 'neither_left_nor_right'
-    if config['input_files'].get('plateaus', None) is not None:
-        log_debug(logger, "Loading plateaus data")
-        plateaus_df = pd.read_csv(config['input_files']['plateaus'], sep='\t', index_col=None)
-        log_debug(logger, f"Loaded plateaus data: {len(plateaus_df)} entries")
-        if plateaus_df is not None:
-            final_events_df = categorize_events_by_plateau_overlap(plateaus_df, final_events_df)
-            log_debug(logger, f'Categorized {len(final_events_df)} events by plateau overlap ({len(plateaus_df)} plateaus): {dict(final_events_df["plateau"].value_counts())}')
-            if remove_plateaus:
-                plateau_events = final_events_df.query('plateau != "neither_left_nor_right"')
-                log_debug(logger, f"Filtering out {len(plateau_events)} events overlapping plateaus")
-                final_events_df = final_events_df.query('plateau == "neither_left_nor_right"').copy().reset_index(drop=True)
-
-    # Very important for some downstream analysis that requires unique indices
-    final_events_df = final_events_df.reset_index(drop=True)
-
-    logger.info(f'Processed final events for loci routines: {len(final_events_df)} events across {final_events_df["sample"].nunique()} samples and {final_events_df["id"].nunique()} IDs (from {raw_length} raw events)')
-
-    return final_events_df
 
 
 def run_loci_assignment_per_chrom(
@@ -872,12 +772,12 @@ def run_loci_assignment_per_chrom(
 ) -> Tuple[List, List]:
     """
     Run loci assignment for a single chromosome using provided loci positions.
-    
+
     This function takes pre-defined loci positions and optimizes their fitness values
     by: 1) creating dummy selection points with zero fitness
     2) optimizing fitness with fixed positions
     3) filtering by CI constraints
-    
+
     Parameters
     ----------
     reference_loci_df : pd.DataFrame
@@ -900,14 +800,17 @@ def run_loci_assignment_per_chrom(
         Force recalculation
     overwrite_preprocessing : bool
         Force recalculation of preprocessing caches (bootstrap signals and data_per_length_scale)
-    
+
     Returns
     -------
     Tuple[List, List]
         (selection_points, loci_widths)
     """
     logger.info(f'Running loci assignment for {cur_chrom}')
-    
+
+    # Per-chromosome stream, as in run_loci_detection_per_chrom above.
+    seed_task(derive_seed('loci_assignment', cur_chrom))
+
     output_dir = os.path.join(loci_results_dir, 'assignment', cur_chrom)
     os.makedirs(output_dir, exist_ok=True)
     
@@ -946,6 +849,7 @@ def run_loci_assignment_per_chrom(
     logger.info(f'Optimizing fitness for {cur_chrom} with fixed positions')
     up_down_order = (chrom_loci['type'] == 'OG').values
     
+    seed_task(derive_seed('loci_assignment', cur_chrom, 'optimizing'))
     optimized_selection_points, _, _ = _optimize_selection_points(
         N_iterations_optim,
         dummy_selection_points,
@@ -961,6 +865,7 @@ def run_loci_assignment_per_chrom(
     
     # Step 3: Apply within CI filtering
     logger.info(f'Applying within-CI filtering for {cur_chrom}')
+    seed_task(derive_seed('loci_assignment', cur_chrom, 'within_ci_filtering'))
     filtered_selection_points = within_ci_fitness_filter(
         cur_chrom,
         ranked_selection_points=optimized_selection_points,
@@ -972,10 +877,10 @@ def run_loci_assignment_per_chrom(
         calc_new_force_new=overwrite,
         calc_new_filename=os.path.join(output_dir, 'assignment_within_ci_filtered.pickle')
     )
-    
+
     # Save results
     save_pickle(filtered_selection_points, os.path.join(output_dir, 'final_selection_points.pickle'))
-    
+
     # Infer widths (placeholder - set to small widths for now)
     N_loci = sum(len(chrom_loci.query('type == @t')) for t in ['OG', 'TSG'])
     loci_widths = [1e6] * N_loci  # Default width of 1 Mbp
@@ -992,11 +897,9 @@ def loci_assignment(
     N_kernel: int = 100_000,
     within_ci_N_iterations: int = 10_000,
     N_iterations_optim: int = 11_000,
-    p_values_N_random: int = 10_000,
-    p_values_N_iterations: int = 1_000,
-    p_values_mode: str = 'random',
-    p_values_optimize_ls_separately: bool = False,
     p_value_threshold: float = 0.05,
+    permutation_null: Optional[pd.DataFrame] = None,
+    p_values_strategy: str = 'zpool',
     overwrite: bool = False,
     overwrite_preprocessing: bool = False,
     calculate_p_value: bool = True,
@@ -1030,7 +933,7 @@ def loci_assignment(
         Force recalculation of preprocessing caches
     cores : int
         Number of cores for parallelization (not used in current version)
-    
+
     Notes
     -----
     Requires config['input_files']['reference_loci'] to point to a TSV file with columns:
@@ -1109,14 +1012,12 @@ def loci_assignment(
 
     # Combine results
     logger.info('Combining per-chromosome results')
-    final_loci_df, filtered_selection_points, filtered_loci_widths = combine_loci(
+    final_loci_df, filtered_selection_points, filtered_loci_widths, _unfiltered = combine_loci(
         loci_results_dir=loci_results_dir,
         processed_events=processed_events,
-        p_values_N_random=p_values_N_random,
-        p_values_N_iterations=p_values_N_iterations,
-        p_values_mode=p_values_mode,
-        p_values_optimize_ls_separately=p_values_optimize_ls_separately,
         p_value_threshold=p_value_threshold,
+        permutation_null=permutation_null,
+        p_values_strategy=p_values_strategy,
         calculate_p_value=calculate_p_value,
         overwrite=overwrite,
         mode='assignment'

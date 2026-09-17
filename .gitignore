@@ -1,5 +1,4 @@
 config.yaml
-.snakemake
 logs
 
 *.pyc
@@ -21,6 +20,9 @@ dist
 *.pickle
 *.placeholder
 *.tsv
+# force-include reference tables under spice/objects/
+!spice/objects/*.tsv
+!tests/objects/*.tsv
 *.yaml
 
 logs/*
@@ -29,4 +31,3 @@ plots/*
 
 # Specific files
 notebooks/debug*.ipynb
-OLD_Snakefile
