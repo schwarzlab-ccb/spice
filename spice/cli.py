@@ -895,7 +895,8 @@ def main_loci_detection(args):
         permutation_null=null_df,
         p_values_strategy=p_values_strategy,
         overwrite=args.overwrite,
-        mode='detection'
+        mode='detection',
+        final_reoptimization_N_iterations=loci_params['final_reoptimization_N_iterations'],
     )
 
     # Save final combined loci results
@@ -912,6 +913,15 @@ def main_loci_detection(args):
     logger.info(f'Saved the pre-filter loci table ({len(unfiltered_loci_df)} loci) to {unfiltered_output_path}')
     save_pickle(filtered_selection_points, os.path.join(config['directories']['results_dir'], config['name'], 'loci_of_selection', 'detection', 'final_loci_detection_filtered.pickle'))
     save_pickle(filtered_loci_widths, os.path.join(config['directories']['results_dir'], config['name'], 'loci_of_selection', 'detection', 'final_loci_detection_filtered_widths.pickle'))
+
+    # Genome-wide diagnostic: how much of the signal the (filtered, reoptimized) loci explain
+    from spice.tsg_og.detection import calc_genome_wide_within_ci
+    genome_wide_within_ci, within_ci_df = calc_genome_wide_within_ci(
+        loci_results_dir, mode='detection', all_selection_points=filtered_selection_points)
+    logger.info(f'Genome-wide fraction of signal within the bootstrap CI (filtered, reoptimized loci): {genome_wide_within_ci:.4f}')
+    within_ci_output_path = os.path.join(config['directories']['results_dir'], config['name'], 'within_ci_detection.tsv')
+    within_ci_df.to_csv(within_ci_output_path, sep='\t', index=True)
+    logger.info(f'Saved per-chromosome within-CI fractions to {within_ci_output_path}')
 
     logger.info('Loci detection pipeline completed.')
 

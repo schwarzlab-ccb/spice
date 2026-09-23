@@ -5,6 +5,7 @@ from copy import copy, deepcopy
 from functools import reduce
 from joblib import Parallel, delayed
 import numpy as np
+import pandas as pd
 
 from spice import data_loaders, directories, config
 from spice.utils import open_pickle, CALC_NEW
@@ -69,6 +70,58 @@ def calc_within_ci_bootstrap(data_per_length_scale, simulated_conv, exclude_zero
                            cur_conv[data['non_centromere_index']] > data['signal_bounds'][0][data['non_centromere_index']]))
             for data, cur_conv in zip(data_per_length_scale.values(), simulated_conv)]
     return cur_within_ci
+
+
+def calc_genome_wide_within_ci(
+        loci_results_dir,
+        chroms=CHROMS[:-1],
+        mode='detection',
+        use_filtered=True,
+        all_data_per_length_scale=None,
+        all_selection_points=None,
+        exclude_zero_signal=False):
+    """Length-weighted fraction of the genome within the bootstrap CI.
+
+    Reuses what loci detection already wrote to disk: data_per_length_scale cached at
+    `<loci_results_dir>/data_per_length_scale/<chrom>.pickle`, and either the raw per-chromosome
+    final_selection_points (`<loci_results_dir>/<mode>/<chrom>/final_selection_points.pickle`,
+    use_filtered=False) or the p-value-filtered, reoptimized selection points combine_loci writes
+    to `<loci_results_dir>/<mode>/final_loci_<mode>_filtered.pickle` (use_filtered=True, the
+    default -- matches what cli.py already saves at combine time). Pass `all_data_per_length_scale`
+    / `all_selection_points` (chrom -> value) to reuse dicts already in memory instead of
+    re-reading them from disk.
+
+    A chromosome with zero surviving loci falls back to the background-only convolution (no
+    selection points), matching convolution_simulation_per_ls's own None-selection default.
+
+    Returns (genome_wide_within_ci, within_ci_df).
+    """
+    if all_selection_points is None and use_filtered:
+        all_selection_points = open_pickle(
+            os.path.join(loci_results_dir, mode, f'final_loci_{mode}_filtered.pickle'))
+
+    within_ci_per_chrom = {}
+    for cur_chrom in chroms:
+        data_per_length_scale = (
+            all_data_per_length_scale[cur_chrom] if all_data_per_length_scale is not None else
+            open_pickle(os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle')))
+        final_selection_points = (
+            all_selection_points[cur_chrom] if all_selection_points is not None else
+            open_pickle(os.path.join(loci_results_dir, mode, cur_chrom, 'final_selection_points.pickle')))
+        if len(final_selection_points[0]) == 0:
+            final_selection_points = None  # background-only convolution
+
+        simulated_conv = convolution_simulation_per_ls(cur_chrom, data_per_length_scale, final_selection_points)
+        within_ci_per_chrom[cur_chrom] = np.mean(calc_within_ci_bootstrap(
+            data_per_length_scale, simulated_conv, exclude_zero_signal=exclude_zero_signal))
+
+    within_ci_df = (
+        pd.DataFrame(within_ci_per_chrom, index=['within_ci']).T
+        .join(CHROM_LENS.rename('length'), how='left')
+    )
+    genome_wide_within_ci = within_ci_df.eval('within_ci * length').sum() / CHROM_LENS.loc[within_ci_df.index].sum()
+
+    return genome_wide_within_ci, within_ci_df
 
 
 def get_cur_widths(final_events_df, cur_chrom, cur_length_scale=None, cur_type="gain",
@@ -1020,7 +1073,6 @@ def limiting_fitness(
 def final_optimization_step(
     cur_chrom,
     final_selection_points,
-    final_events_df=None,
     data_per_length_scale=None,
     segment_size_dict=DEFAULT_SEGMENT_SIZE_DICT,
     n_neighbors_optimization=10,

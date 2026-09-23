@@ -618,6 +618,7 @@ def combine_loci(
     p_values_strategy: str = 'zpool',
     overwrite: bool = False,
     mode: str = 'detection',
+    final_reoptimization_N_iterations: int = 100_000,
 ) -> Tuple[pd.DataFrame, Dict, Dict, pd.DataFrame]:
     """
     Combine results from all chromosomes after loci detection or assignment
@@ -736,6 +737,30 @@ def combine_loci(
             filtered_loci_widths[cur_chrom] = [
                 x for i, x in enumerate(all_loci_widths[cur_chrom]) if keep[i]]
         final_loci_df = final_loci_df[final_loci_df['_keep']].drop(columns='_keep').reset_index(drop=True)
+
+        # Dropping non-significant loci leaves the survivors' fitness stale for the reduced model.
+        # Refit them (positions frozen) with the same per-locus-neighborhood optimizer as used before
+        n_to_reoptimize = sum(len(v[0]) for v in filtered_selection_points.values())
+        logger.info(f'Reoptimizing fitness of {n_to_reoptimize} surviving loci after p-value '
+                    f'filtering ({final_reoptimization_N_iterations} iterations/locus-neighborhood)')
+        fitness_cols = [f'fitness_{ls}_{d}' for ls in LENGTH_SCALE_NAMES for d in ['gain', 'loss']]
+        for cur_chrom, chrom_selection_points in filtered_selection_points.items():
+            if len(chrom_selection_points[0]) == 0:
+                continue
+            reoptimized_selection_points, _ = final_optimization_step(
+                cur_chrom=cur_chrom,
+                final_selection_points=chrom_selection_points,
+                data_per_length_scale=all_data_per_length_scale[cur_chrom],
+                n_neighbors_optimization=10,
+                N_iterations_optimization=final_reoptimization_N_iterations,
+                max_pos_change=1e5)
+            filtered_selection_points[cur_chrom] = reoptimized_selection_points
+            cur_index = final_loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom').index
+            final_loci_df.loc[cur_index, fitness_cols] = np.stack(
+                [[locus[0].fitness for locus in ls_track] for ls_track in reoptimized_selection_points], axis=1)
+        gain_cols = [f'fitness_{ls}_gain' for ls in LENGTH_SCALE_NAMES]
+        final_loci_df['type'] = np.where((final_loci_df[gain_cols] > 0).any(axis=1), 'OG', 'TSG')
+
         cut = f'q_value < {p_value_threshold}' + (
             f' and mean fitness > {mean_fitness_threshold}' if mean_fitness_threshold is not None else '')
         logger.info(f'Assigned fitness p/q from the permutation null (global BH-FDR; p_value = raw, '
