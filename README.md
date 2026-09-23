@@ -119,6 +119,30 @@ Rerunning a permutation unit invalidates its combined table and the pooled null.
 once all units finish. `spice permute --config <config> --pool --overwrite` also forces
 recombination of existing per-chromosome results, without rerunning detection.
 
+An opt-in chromosome-wide null is available with:
+
+```yaml
+loci_detection:
+  p_values_permute_mode: chromosome_hybrid
+  p_values_strategy: zpool_chrom
+```
+
+Events no longer than the shorter usable arm must fit wholly in either arm.
+Longer events may also span the centromere, preserving physical width with both
+endpoints outside the gap. A chromosome with one usable arm stays within that
+arm. Starts are sampled uniformly over legal integer coordinates, independently
+per event; sample/direction/widths are retained but event spacing is not. Events
+with no legal placement remain fixed and are counted in the log.
+
+Hybrid mode preprocesses the observed events first, then randomizes the retained
+set without filtering it again. This keeps newly spanning events in the null.
+Use `zpool_chrom` or `perchrom`; `zpool` would condition on arm membership again
+and is rejected. Use a fresh output directory/null. Mode-tagged tables and
+per-chromosome cache markers prevent mixing old arm-restricted results into the
+new null. This is implemented and unit-tested, not yet empirically calibrated.
+`--mode chromosome_hybrid` is also accepted by `spice permute`, but the config
+must use the corresponding chromosome scoring strategy.
+
 Loci preprocessing and each fitting stage use separate random streams. With the same
 inputs, parameters, and seed, rebuilding a stage gives the same result whether preceding
 stages were computed, cached, or loaded during a resumed run. When changing the seed,

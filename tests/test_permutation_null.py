@@ -243,3 +243,75 @@ def test_rotation_samples_each_legal_integer_cut_once():
     offsets = [_rotation_offset(starts, ends, 0, 10, FixedDraw(draw))
                for draw in range(len(legal))]
     assert sorted(offsets) == sorted((-cut) % 10 for cut in legal)
+
+
+class TestChromosomeHybrid:
+    @pytest.mark.parametrize('bounds', [(0, 4, 6, 15), (4, 0, 6, 15), (0, 4, 15, 15), (0, 4, 4, 15)])
+    def test_all_legal_integer_starts_sampled_exactly_once(self, bounds):
+        from spice.tsg_og.permutation import _hybrid_start_ranges, _draw_start
+        p_lo, p_hi, q_lo, q_hi = bounds
+        arms = [(lo, hi) for lo, hi in [(p_lo,p_hi),(q_lo,q_hi)] if hi > lo]
+        for width in range(1, 18):
+            allow_bridge = len(arms)==2 and width>min(hi-lo for lo,hi in arms)
+            legal = [start for start in range(16) if
+                     any(lo <= start and start+width <= hi for lo,hi in arms) or
+                     (allow_bridge and p_lo <= start <= p_hi and q_lo <= start+width <= q_hi)]
+            ranges = _hybrid_start_ranges(width, bounds)
+            class FixedDraw:
+                def __init__(self, draw): self.draw=draw
+                def integers(self, high):
+                    assert high==len(legal)
+                    return self.draw
+            if legal:
+                assert [_draw_start(ranges,FixedDraw(i)) for i in range(len(legal))]==legal
+            else:
+                assert _draw_start(ranges,FixedDraw(0)) is None
+
+    def test_short_events_move_between_arms_and_long_events_bridge(self):
+        ev=pd.DataFrame({'sample':['S']*400,'chrom':'chr1','pos':'internal',
+                         'start':60,'width':[20]*200+[60]*200,'type':['gain','loss']*200})
+        ev['end']=ev.start+ev.width
+        out,moved,fixed=permute_events(ev,7,mode='chromosome_hybrid',bounds={'chr1':(0,40,50,140)})
+        short,long=out.iloc[:200],out.iloc[200:]
+        assert (short.end<=40).any() and (short.start>=50).any()
+        assert ((short.end<=40)|(short.start>=50)).all()
+        assert ((long.start<=40)&(long.end>=50)).any()
+        assert (long.start>=50).any()
+        assert ((out.start<=40)|(out.start>=50)).all()
+        assert ((out.end<=40)|(out.end>=50)).all()
+        assert (out.start>=0).all() and (out.end<=140).all()
+        np.testing.assert_array_equal(out.end-out.start,ev.width)
+        pd.testing.assert_frame_equal(out.drop(columns=['start','end']),ev.drop(columns=['start','end']))
+        assert moved+fixed==len(ev)
+        repeated=permute_events(ev,7,mode='chromosome_hybrid',bounds={'chr1':(0,40,50,140)})[0]
+        pd.testing.assert_frame_equal(out,repeated)
+        other=permute_events(ev,8,mode='chromosome_hybrid',bounds={'chr1':(0,40,50,140)})[0]
+        assert not out.start.equals(other.start)
+
+    def test_single_arm_noninternal_and_unplaceable_events(self):
+        ev=pd.DataFrame({'sample':['S']*3,'chrom':'chr1','pos':['internal','internal','whole_arm'],
+                         'start':[60,0,0],'width':[20,160,40],'end':[80,160,40]})
+        out,moved,fixed=permute_events(ev,7,mode='chromosome_hybrid',bounds={'chr1':(20,0,50,140)})
+        assert 50<=out.start.iloc[0] and out.end.iloc[0]<=140
+        pd.testing.assert_frame_equal(out.iloc[1:],ev.iloc[1:])
+        assert moved+fixed==2
+
+    def test_invalid_geometry_and_width_rejected(self):
+        from spice.tsg_og.permutation import _hybrid_start_ranges
+        for width,bounds in [(0,(0,40,50,140)),(1.5,(0,40,50,140)),(10,(0,60,50,140)),(10,(0,np.nan,50,140))]:
+            with pytest.raises(ValueError): _hybrid_start_ranges(width,bounds)
+
+    def test_null_provenance_and_chromosome_calibration(self):
+        from spice.tsg_og.permutation import validate_null_mode, validate_permutation_strategy
+        hybrid=_loci().assign(permutation_mode='chromosome_hybrid')
+        null=null_from_loci([hybrid])
+        validate_null_mode(null,'chromosome_hybrid')
+        validate_permutation_strategy('chromosome_hybrid','zpool_chrom')
+        validate_permutation_strategy('chromosome_hybrid','perchrom')
+        with pytest.raises(ValueError): validate_permutation_strategy('chromosome_hybrid','zpool')
+        with pytest.raises(ValueError): permutation_p(_loci(),null,'zpool')
+        assert np.isfinite(permutation_p(_loci(),null,'zpool_chrom')).all()
+        with pytest.raises(ValueError): validate_null_mode(null,'rotate')
+        with pytest.raises(ValueError): validate_null_mode(null.drop(columns='permutation_mode'),'chromosome_hybrid')
+        with pytest.raises(ValueError): null_from_loci([hybrid,_loci()])
+        with pytest.raises(ValueError): null_from_loci([hybrid,hybrid.assign(permutation_mode='rotate')])

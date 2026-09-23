@@ -36,6 +36,10 @@ def permutation_run(tmp_path, monkeypatch):
                         lambda **kwargs: events)
     monkeypatch.setattr(main_loci_functions, 'run_loci_detection_per_chrom', lambda **kwargs: None)
     monkeypatch.setattr(main_loci_functions, 'combine_loci', lambda **kwargs: (locus_frame(), {}, {}, locus_frame()))
+    # CI output is unrelated to orchestration and requires real fitted caches.
+    from spice.tsg_og import detection
+    monkeypatch.setattr(detection, 'calc_genome_wide_within_ci',
+                        lambda *args, **kwargs: (0.5, pd.DataFrame({'within_ci': [0.5]}, index=['chr1'])))
     args = argparse.Namespace(config_path='test.yaml', debug=False, log='terminal',
                               permutations=None, mode=None, loci_steps=None, pool=False,
                               chrom=None, index=None, seed=None, overwrite=False, cores=1)
@@ -141,3 +145,88 @@ def test_resumed_detection_uses_configured_cascade_for_new_null():
     assert cli._permutation_detection_steps(complete, 'fast') == complete[:-1]
     with pytest.raises(ValueError, match='complete detection cascade'):
         cli._permutation_detection_steps('combine', 'combine')
+
+
+@pytest.mark.parametrize('mode',['rotate','uniform','chromosome_hybrid'])
+def test_preprocessing_order_preserves_hybrid_bridges(monkeypatch,mode):
+    raw=pd.DataFrame({'chrom':['chr1'],'sample':['S'],'pos':['internal'],
+                      'start':[60],'end':[120],'width':[60]})
+    calls=[]
+    def preprocess(final_events_df,**kwargs):
+        calls.append('preprocess')
+        # Model the location-dependent filter that would discard a new bridge.
+        return final_events_df[final_events_df.start>=50].copy()
+    def permute(frame,seed,mode):
+        calls.append('permute')
+        return frame.assign(start=10,end=70),1,0
+    monkeypatch.setattr(main_loci_functions,'process_final_events_for_loci_routines',preprocess)
+    monkeypatch.setattr(permutation,'permute_events',permute)
+    result,_,_=permutation.prepare_permutation_events(raw,seed=1,mode=mode,loci_params={})
+    if mode=='chromosome_hybrid':
+        assert calls==['preprocess','permute']
+        assert len(result)==1 and result.start.iloc[0]==10
+    else:
+        assert calls==['permute','preprocess']
+        assert result.empty
+
+
+@pytest.mark.parametrize('execution',['inline','scatter','pool'])
+def test_hybrid_event_frame_reaches_detection_or_combine(permutation_run,monkeypatch,execution):
+    args,cfg,root,events=permutation_run
+    cfg['loci_detection'].update(p_values_permute_mode='chromosome_hybrid',p_values_strategy='zpool_chrom')
+    processed=events.assign(start=10,end=70,width=60,pos='internal')
+    calls=[]
+    def prepare(frame,**kwargs):
+        assert kwargs['mode']=='chromosome_hybrid'
+        return processed,1,0
+    def detect(**kwargs):
+        assert kwargs['final_events_df'] is processed
+        calls.append('detect')
+    def combine(**kwargs):
+        assert kwargs['processed_events'] is processed
+        calls.append('combine')
+        return locus_frame(),{},{},locus_frame()
+    monkeypatch.setattr(permutation,'prepare_permutation_events',prepare)
+    monkeypatch.setattr(main_loci_functions,'run_loci_detection_per_chrom',detect)
+    monkeypatch.setattr(main_loci_functions,'combine_loci',combine)
+    if execution=='scatter':args.index,args.chrom=1,'chr1'
+    if execution=='pool':
+        args.pool=True
+        cli._check_permutation_chrom_mode(str(root/'permutations/s1'),'chr1','chromosome_hybrid',write=True)
+    cli.main_permute(args)
+    assert calls=={'inline':['detect','combine'],'scatter':['detect'],'pool':['combine']}[execution]
+    if execution!='scatter':
+        null=pd.read_csv(root/permutation.NULL_FILENAME,sep='\t')
+        assert set(null.permutation_mode)=={'chromosome_hybrid'}
+
+
+def test_hybrid_rejects_old_scatter_cache_and_pool(permutation_run):
+    args,cfg,root,events=permutation_run
+    unit=root/'permutations/s1';(unit/'detection/chr1').mkdir(parents=True)
+    with pytest.raises(ValueError,match='fresh output'):
+        cli._check_permutation_chrom_mode(str(unit),'chr1','chromosome_hybrid',write=True)
+    cfg['loci_detection'].update(p_values_permute_mode='chromosome_hybrid',p_values_strategy='zpool_chrom')
+    locus_frame().to_csv(unit/'unit_loci.tsv',sep='\t',index=False)
+    args.pool=True
+    with pytest.raises(ValueError,match='fresh null'): cli.main_permute(args)
+
+
+def test_cached_hybrid_null_cannot_be_read_as_legacy(permutation_run):
+    args,cfg,root,events=permutation_run
+    root.mkdir(parents=True)
+    pd.DataFrame({'stat':[1],'permutation_mode':['chromosome_hybrid']}).to_csv(root/permutation.NULL_FILENAME,sep='\t',index=False)
+    with pytest.raises(ValueError,match='mode mismatch'):cli._load_permutation_null_or_none(str(root))
+
+
+def test_mode_mismatch_does_not_invalidate_existing_tables(permutation_run,monkeypatch):
+    args,cfg,root,events=permutation_run
+    unit=root/'permutations/s1'
+    cli._check_permutation_chrom_mode(str(unit),'chr1','rotate',write=True)
+    (unit/'unit_loci.tsv').write_text('original unit')
+    (root/permutation.NULL_FILENAME).write_text('original null')
+    cfg['loci_detection'].update(p_values_permute_mode='chromosome_hybrid',p_values_strategy='zpool_chrom')
+    monkeypatch.setattr(permutation,'prepare_permutation_events',lambda *a,**kw:(events,1,0))
+    args.index,args.chrom=1,'chr1'
+    with pytest.raises(ValueError,match='mode mismatch'):cli.main_permute(args)
+    assert (unit/'unit_loci.tsv').read_text()=='original unit'
+    assert (root/permutation.NULL_FILENAME).read_text()=='original null'
