@@ -496,6 +496,15 @@ spice plotting --config <path/to/config> --plot-single-locus 3 --loci-mode detec
   tables used for detection or assignment.
 - Output PNGs are saved to `plot_dir/{name}/` (see `directories.plot_dir` in config; defaults to `plots/`).
 
+Detection plots use the saved combined fit (`detection/final_loci_detection_filtered.pickle`)
+when available, matching the final table and within-CI scores. Before combination,
+they use the original chromosome fit. An empty combined fit remains empty in the plot.
+Single-locus plots translate original ranks to positions among the surviving peaks.
+
+Combination only reoptimizes chromosomes where q-value or mean-fitness filtering
+removed peaks. If every peak is retained, the original fitness is kept. P/q values
+remain the scores calculated before this optional refit.
+
 For interactive exploration, see `notebooks/loci_plotting.ipynb`.
 
 ---

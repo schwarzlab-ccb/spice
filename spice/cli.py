@@ -312,6 +312,18 @@ def main_event_inference(args):
     logger.info(f'Done. Results are in {results_events_dir}')
 
 
+def _load_plot_selection_points(output_dir, mode, chrom):
+    """Prefer the combined detection fit used by the final table and CI scores."""
+    combined = os.path.join(output_dir, mode, 'final_loci_detection_filtered.pickle')
+    if mode == 'detection' and os.path.exists(combined):
+        points = open_pickle(combined)
+        if chrom not in points:
+            raise ValueError(f'Combined detection fit has no {chrom}; recombine before plotting')
+        return points[chrom], True
+    original = os.path.join(output_dir, mode, chrom, 'final_selection_points.pickle')
+    return open_pickle(original), False
+
+
 def main_plotting(args):
     """Run plotting mode."""
     import pandas as pd
@@ -397,7 +409,8 @@ def main_plotting(args):
         logger.info(f'Plotting all loci on {cur_chrom} ({detection_assignment} mode)')
         
         data_per_ls = open_pickle(os.path.join(output_dir, 'data_per_length_scale', f'{cur_chrom}.pickle'))
-        selection_points = open_pickle(os.path.join(output_dir, detection_assignment, cur_chrom, 'final_selection_points.pickle'))
+        selection_points, combined_fit = _load_plot_selection_points(
+            output_dir, detection_assignment, cur_chrom)
         
         simulated_conv = convolution_simulation_per_ls(
             cur_chrom, data_per_ls, selection_points)
@@ -428,11 +441,17 @@ def main_plotting(args):
         logger.info(f'Plotting locus index {loci_index} on {cur_chrom} ({detection_assignment} mode)')
         
         data_per_ls = open_pickle(os.path.join(output_dir, 'data_per_length_scale', f'{cur_chrom}.pickle'))
-        selection_points = open_pickle(os.path.join(output_dir, detection_assignment, cur_chrom, 'final_selection_points.pickle'))
+        selection_points, combined_fit = _load_plot_selection_points(
+            output_dir, detection_assignment, cur_chrom)
         simulated_conv = convolution_simulation_per_ls(
             cur_chrom, data_per_ls, selection_points)
         
-        cluster_i = final_loci_df.loc[loci_index, 'rank_on_chrom']
+        if combined_fit:
+            # Original ranks can have gaps after filtering; the combined fit is compact.
+            chrom_rows = final_loci_df[final_loci_df.chrom == cur_chrom].sort_values('rank_on_chrom')
+            cluster_i = chrom_rows.index.get_loc(loci_index)
+        else:
+            cluster_i = int(final_loci_df.loc[loci_index, 'rank_on_chrom'])
         fig, axs = plt.subplots(figsize=(40, 13), nrows=1, ncols=4)
         spice_plot.plot_tsg_og_results(
             cur_chrom, data_per_ls, simulated_conv=simulated_conv,
