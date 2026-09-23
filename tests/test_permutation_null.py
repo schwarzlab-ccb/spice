@@ -315,3 +315,21 @@ class TestChromosomeHybrid:
         with pytest.raises(ValueError): validate_null_mode(null.drop(columns='permutation_mode'),'chromosome_hybrid')
         with pytest.raises(ValueError): null_from_loci([hybrid,_loci()])
         with pytest.raises(ValueError): null_from_loci([hybrid,hybrid.assign(permutation_mode='rotate')])
+
+
+def test_hybrid_preserves_coordinate_span_and_distinct_model_width():
+    # Imported records can have a model width different from endpoint distance.
+    # The model width must not shrink/stretch the interval during permutation.
+    events = pd.DataFrame(dict(chrom=['chr1']*400, sample=['S']*400,
+        pos=['internal']*400, start=[60]*400, end=[120]*200+[80]*200,
+        width=[20]*200+[60]*200, type=['gain']*400))
+    out, moved, fixed = permute_events(events, 7, mode='chromosome_hybrid',
+                                      bounds={'chr1': (0,40,50,140)})
+    np.testing.assert_array_equal(out.end-out.start, events.end-events.start)
+    pd.testing.assert_frame_equal(out.drop(columns=['start','end']), events.drop(columns=['start','end']))
+    long = out.iloc[:200]
+    assert ((long.start <= 40) & (long.end >= 50)).any()
+    short = out.iloc[200:]
+    assert (((short.start >= 0) & (short.end <= 40)) |
+            ((short.start >= 50) & (short.end <= 140))).all()
+    assert moved+fixed == len(events)

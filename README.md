@@ -544,3 +544,9 @@ GNU GENERAL PUBLIC LICENSE
 ## 11. Contact
 
 For questions and issues, please contact tom.kaufmann@iccb-cologne.org or roland.schwarz@iccb-cologne.org.
+
+
+Hybrid permutation uses `end-start` for placement geometry and preserves the
+input `width` separately. Imported event tables may contain different values;
+SPICE uses the stored width for length-scale/kernel modeling, so permutation
+must neither overwrite it nor stretch the original coordinate span to match it.

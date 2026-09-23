@@ -155,12 +155,14 @@ def _permute_hybrid(events_df, seed, bounds):
         row = ev.iloc[i]
         if row.chrom not in bounds:
             raise ValueError(f'Missing hybrid arm bounds for {row.chrom}')
-        if row.end-row.start != row.width:
-            raise ValueError('Hybrid event width must equal end-start')
-        start = _draw_start(_hybrid_start_ranges(row.width, bounds[row.chrom]), rng)
+        # Imported event tables can carry a model width different from their
+        # coordinate span. Preserve both: geometry controls placement, while
+        # the original width continues to determine SPICE's scale/kernel inputs.
+        span = row.end-row.start
+        start = _draw_start(_hybrid_start_ranges(span, bounds[row.chrom]), rng)
         # No valid placement: retain the event and include it in the fixed count.
         if start is not None:
-            starts[i], ends[i] = start, start+row.width
+            starts[i], ends[i] = start, start+span
     ev['start'], ev['end'] = starts, ends
     moved = int((internal & (starts != events_df['start'].to_numpy())).sum())
     return ev, moved, int(internal.sum())-moved
@@ -205,7 +207,8 @@ def permute_events(events_df, seed, mode='rotate', bounds=None):
     """Permute internal events; return (df, n_moved, n_fixed).
 
     `chromosome_hybrid` places events independently across the chromosome using
-    _hybrid_start_ranges. It preserves widths and sample/direction/chromosome
+    _hybrid_start_ranges with the coordinate span (end-start). It preserves both
+    that span and the stored model width, plus sample/direction/chromosome
     identities, but not spacing or overlaps. Use prepare_permutation_events for
     raw inputs so the observed event set is selected before this randomization.
 
