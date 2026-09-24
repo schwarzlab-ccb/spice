@@ -23,6 +23,7 @@ from spice.loci_preprocessing import process_final_events_for_loci_routines
 from spice.tsg_og.loci import (
     create_loci_df, assign_p_values, calculate_events_per_loci_df)
 from spice.tsg_og.permutation import fitness_statistic
+from spice.scale_modes import SCALES, activate_scale, check_cache_mode, validate_mode
 
 if sys.version_info >= (3, 9):
     from importlib.resources import files
@@ -87,7 +88,9 @@ def run_loci_detection_per_chrom(
     final_limiting_N_iterations_optim=10_000,
     N_bootstrap_for_widths=200,
     th_locus_prominence=5,
-    th_locus_mean_fitness=1
+    th_locus_mean_fitness=1,
+    detection_scale_mode="joint",
+    _active_length_scale=None,
 ):
     """
     Run the loci detection pipeline for a given chromosome.
@@ -133,9 +136,18 @@ def run_loci_detection_per_chrom(
         Threshold for the mean directed fitness post-processing filter
     """
     
+    validate_mode(detection_scale_mode)
+    if _active_length_scale is None:
+        check_cache_mode(loci_results_dir, cur_chrom, detection_scale_mode, write=True)
+        if detection_scale_mode == 'independent':
+            params = locals().copy()
+            from spice.independent_detection import run_independent_scales
+            return run_independent_scales(run_loci_detection_per_chrom, params)
+    seed_chrom = cur_chrom if _active_length_scale is None else f'{cur_chrom}:{_active_length_scale}'
+
     # Each stochastic stage below also gets its own stream: preceding stages and
     # preprocessing may run, load from cache, or be skipped during a resumed run.
-    seed_task(derive_seed('loci_detection', cur_chrom))
+    seed_task(derive_seed('loci_detection', seed_chrom))
 
     # Define all available steps
     which_options = [
@@ -190,6 +202,10 @@ def run_loci_detection_per_chrom(
     name = name if name is not None else config['name']
     
     output_dir = os.path.join(loci_results_dir, 'detection', cur_chrom)
+    if _active_length_scale is not None:
+        output_dir = os.path.join(output_dir, _active_length_scale)
+        i = SCALES.index(_active_length_scale) * 2
+        length_scales_for_residuals = f'{i}{i+1}'
        
     if N_loci_spacing:
         # One locus per N_loci_spacing bp of searchable sequence, derived from the same blocked
@@ -214,6 +230,7 @@ def run_loci_detection_per_chrom(
         cur_chrom=cur_chrom,
         final_events_df=final_events_df,
         N_bootstrap=N_bootstrap,
+        independent_scales=detection_scale_mode == "independent",
         calc_new_force_new=overwrite_preprocessing,
         calc_new_filename=os.path.join(
             loci_results_dir, 'signal_bootstrap', f'{cur_chrom}_N_{N_bootstrap}.pickle'))
@@ -221,8 +238,12 @@ def run_loci_detection_per_chrom(
     # Load relevant data
     data_per_length_scale = collect_data_per_length_scale(
         final_events_df, cur_chrom, N_bootstrap=N_bootstrap, N_kernel=N_kernel, loci_results_dir=loci_results_dir,
+        independent_scales=detection_scale_mode == "independent",
         calc_new_force_new=overwrite_preprocessing,
         calc_new_filename=os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle'))
+
+    if _active_length_scale is not None:
+        data_per_length_scale = activate_scale(data_per_length_scale, _active_length_scale)
 
     # Initialize results dictionary
     RESULTS = {w: None for w in which_options}
@@ -230,7 +251,7 @@ def run_loci_detection_per_chrom(
     
     # Detection step
     if 'detection' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'detection'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'detection'))
         logger.info(f'Running detection')
         log_debug(logger, f'Output: {output_dir}/{filenames["detection"]}')
         
@@ -250,7 +271,7 @@ def run_loci_detection_per_chrom(
     
     # Flipping step
     if 'flipping' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'flipping'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'flipping'))
         logger.info(f'Running flipping')
         log_debug(logger, f'Output: {output_dir}/{filenames["flipping"]}')
         
@@ -269,7 +290,7 @@ def run_loci_detection_per_chrom(
     
     # Ranking step
     if 'ranking' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'ranking'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'ranking'))
         logger.info(f'Running ranking')
         log_debug(logger, f'Output: {output_dir}/{filenames["ranking"]}')
         
@@ -297,7 +318,7 @@ def run_loci_detection_per_chrom(
     
     # Within CI filtering step
     if 'within_ci_filtering' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'within_ci_filtering'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'within_ci_filtering'))
         logger.info(f'Running within_ci_filtering')
         log_debug(logger, f'Output: {output_dir}/{filenames["within_ci_filtering"]}')
         
@@ -322,7 +343,7 @@ def run_loci_detection_per_chrom(
     
     # Limiting step
     if 'limiting' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'limiting'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'limiting'))
         logger.info(f'Running limiting')
         log_debug(logger, f'Output: {output_dir}/{filenames["limiting"]}')
         
@@ -346,7 +367,7 @@ def run_loci_detection_per_chrom(
     
     # Optimizing intermediate step
     if 'optimizing_intermediate' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'optimizing_intermediate'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'optimizing_intermediate'))
         logger.info(f'Running optimizing_intermediate')
         log_debug(logger, f'Output: {output_dir}/{filenames["optimizing_intermediate"]}')
         
@@ -365,7 +386,7 @@ def run_loci_detection_per_chrom(
     
     # locus widths intermediate step
     if 'loci_widths_intermediate' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'loci_widths_intermediate'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'loci_widths_intermediate'))
         logger.info(f'Running loci_widths_intermediate')
         log_debug(logger, f'Output: {output_dir}/{filenames["loci_widths_intermediate"]}')
         
@@ -388,7 +409,7 @@ def run_loci_detection_per_chrom(
     
     # Merging step
     if 'merging' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'merging'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'merging'))
         logger.info(f'Running merging')
         log_debug(logger, f'Output: {output_dir}/{filenames["merging"]}')
         
@@ -411,7 +432,7 @@ def run_loci_detection_per_chrom(
     
     # Optimizing step
     if 'optimizing' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'optimizing'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'optimizing'))
         logger.info(f'Running optimizing')
         log_debug(logger, f'Output: {output_dir}/{filenames["optimizing"]}')
         
@@ -432,7 +453,7 @@ def run_loci_detection_per_chrom(
     
     # locus widths intermediate 2 step
     if 'loci_widths_intermediate_2' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'loci_widths_intermediate_2'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'loci_widths_intermediate_2'))
         logger.info(f'Running loci_widths_intermediate_2')
         log_debug(logger, f'Output: {output_dir}/{filenames["loci_widths_intermediate_2"]}')
         
@@ -455,7 +476,7 @@ def run_loci_detection_per_chrom(
     
     # Filter loci intermediate 1 step
     if 'filter_loci_intermediate_1' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'filter_loci_intermediate_1'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'filter_loci_intermediate_1'))
         logger.info(f'Running filter_loci_intermediate_1')
         log_debug(logger, f'Output: {output_dir}/{filenames["filter_loci_intermediate_1"]}')
         
@@ -485,7 +506,7 @@ def run_loci_detection_per_chrom(
     
     # Final within CI filtering step
     if 'final_within_ci_filtering' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'final_within_ci_filtering'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'final_within_ci_filtering'))
         logger.info(f'Running final_within_ci_filtering')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_within_ci_filtering"]}')
         
@@ -507,7 +528,7 @@ def run_loci_detection_per_chrom(
     
     # Final filter loci step
     if 'final_filter_loci' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'final_filter_loci'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'final_filter_loci'))
         logger.info(f'Running final_filter_loci')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_filter_loci"]}')
         
@@ -530,7 +551,7 @@ def run_loci_detection_per_chrom(
 
     # Final limiting step
     if 'final_limiting' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'final_limiting'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'final_limiting'))
         logger.info(f'Running final_limiting')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_limiting"]}')
         
@@ -549,7 +570,7 @@ def run_loci_detection_per_chrom(
             show_progress=False,
             loss_threshold=0.125,
             within_ci_threshold=0.01,
-            ls_i_to_check=(6, 7),
+            ls_i_to_check=(6, 7) if _active_length_scale is None else length_scales_for_residuals,
             calc_new_force_new=overwrite,
             calc_new_filename=os.path.join(output_dir, filenames['final_limiting']))
         
@@ -567,7 +588,7 @@ def run_loci_detection_per_chrom(
 
     # Final locus widths step
     if 'final_loci_widths' in which_steps:
-        seed_task(derive_seed('loci_detection', cur_chrom, 'final_loci_widths'))
+        seed_task(derive_seed('loci_detection', seed_chrom, 'final_loci_widths'))
         logger.info(f'Running final_loci_widths')
         log_debug(logger, f'Output: {output_dir}/{filenames["final_loci_widths"]}')
         
@@ -625,6 +646,7 @@ def combine_loci(
     overwrite: bool = False,
     mode: str = 'detection',
     final_reoptimization_N_iterations: int = 100_000,
+    detection_scale_mode: str = "joint",
 ) -> Tuple[pd.DataFrame, Dict, Dict, pd.DataFrame]:
     """
     Combine results from all chromosomes after loci detection or assignment
@@ -650,8 +672,12 @@ def combine_loci(
     all_selection_points = {}
     all_loci_widths = {}
     all_data_per_length_scale = {}
+    all_locus_scales = {}
+    validate_mode(detection_scale_mode)
 
     for cur_chrom in cached_loci_chromosomes(loci_results_dir):
+        if mode == "detection":
+            check_cache_mode(loci_results_dir, cur_chrom, detection_scale_mode)
         data_per_length_scale_file = os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle')
         logger.info(f"Loading results for {cur_chrom}")
         
@@ -663,6 +689,11 @@ def combine_loci(
         
         final_selection_points = open_pickle(final_selection_points_file)
         all_selection_points[cur_chrom] = final_selection_points
+        if detection_scale_mode == 'independent':
+            labels = open_pickle(os.path.join(loci_results_dir, mode, cur_chrom, 'final_locus_scales.pickle'))
+            if len(labels) != len(final_selection_points[0]) or any(x not in SCALES for x in labels):
+                raise ValueError(f'{cur_chrom}: invalid independent locus scale labels')
+            all_locus_scales[cur_chrom] = labels
         
         # Load peak widths
         peak_widths_file = os.path.join(loci_results_dir, mode, cur_chrom, 'final_loci_widths.pickle')
@@ -693,12 +724,19 @@ def combine_loci(
         final_events_df=processed_events
     )
     
+    loci_df['detection_scale_mode'] = detection_scale_mode
+    if detection_scale_mode == 'independent':
+        loci_df['length_scale'] = [all_locus_scales[row.chrom][int(row.rank_on_chrom)]
+                                  for row in loci_df.itertuples()]
+
     if calculate_p_value:
         from spice.length_scales import LENGTH_SCALE_NAMES
         if permutation_null is None or not len(permutation_null):
             raise ValueError(
                 'calculate_p_value=True needs a permutation null. Build one with `spice permute` '
                 '(or let loci detection build it inline) -- see spice.tsg_og.permutation.')
+        from spice.scale_modes import validate_table_mode
+        validate_table_mode(permutation_null, detection_scale_mode)
         final_loci_df = assign_p_values(loci_df, permutation_null, strategy=p_values_strategy)
         # assign_p_values: p_value_raw = raw p, p_value = BH-FDR q. Remap to canonical raw p / FDR q.
         final_loci_df['q_value'] = final_loci_df['p_value']
@@ -732,9 +770,15 @@ def combine_loci(
         filtered_selection_points = dict()
         filtered_loci_widths = dict()
         changed_chromosomes = set()
+        removed_scales = {}
+        kept_scales = {}
         for cur_chrom in list(all_selection_points.keys()):
             keep = (final_loci_df.query('chrom == @cur_chrom')
                                  .sort_values('rank_on_chrom')['_keep'].to_numpy())
+            if detection_scale_mode == 'independent':
+                labels = all_locus_scales[cur_chrom]
+                kept_scales[cur_chrom] = [s for s, k in zip(labels, keep) if k]
+                removed_scales[cur_chrom] = {s for s, k in zip(labels, keep) if not k}
             if not keep.all():
                 changed_chromosomes.add(cur_chrom)
             filtered_selection_points[cur_chrom] = [
@@ -755,13 +799,20 @@ def combine_loci(
         for cur_chrom, chrom_selection_points in filtered_selection_points.items():
             if cur_chrom not in changed_chromosomes or len(chrom_selection_points[0]) == 0:
                 continue
-            reoptimized_selection_points, _ = final_optimization_step(
-                cur_chrom=cur_chrom,
-                final_selection_points=chrom_selection_points,
-                data_per_length_scale=all_data_per_length_scale[cur_chrom],
-                n_neighbors_optimization=10,
-                N_iterations_optimization=final_reoptimization_N_iterations,
-                max_pos_change=1e5)
+            if detection_scale_mode == 'independent':
+                from spice.independent_detection import refit_independent_scales
+                reoptimized_selection_points = refit_independent_scales(
+                    final_optimization_step, cur_chrom, chrom_selection_points,
+                    all_data_per_length_scale[cur_chrom], kept_scales[cur_chrom],
+                    removed_scales[cur_chrom], final_reoptimization_N_iterations)
+            else:
+                reoptimized_selection_points, _ = final_optimization_step(
+                    cur_chrom=cur_chrom,
+                    final_selection_points=chrom_selection_points,
+                    data_per_length_scale=all_data_per_length_scale[cur_chrom],
+                    n_neighbors_optimization=10,
+                    N_iterations_optimization=final_reoptimization_N_iterations,
+                    max_pos_change=1e5)
             filtered_selection_points[cur_chrom] = reoptimized_selection_points
             cur_index = final_loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom').index
             final_loci_df.loc[cur_index, fitness_cols] = np.stack(
@@ -1075,7 +1126,8 @@ def build_final_loci_df(
     """
     if sum(len(x) for x in all_loci_widths.values()) == 0:
         logger.warning('No loci to build a final loci dataframe from; returning an empty dataframe')
-        return pd.DataFrame(columns=['chrom'])
+        return pd.DataFrame(columns=['chrom', 'pos', 'pos_total', 'rank_on_chrom', 'start', 'end', 'width', 'type', 'added_events'] +
+                            [f'fitness_{s}_{d}' for s in SCALES for d in ('gain', 'loss')])
 
     loci_df = create_loci_df(all_selection_points, all_loci_widths, nr_stds_widths=2,
                                 min_widths_is_small_kernel=True)

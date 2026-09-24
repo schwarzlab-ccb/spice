@@ -44,6 +44,8 @@ params:
 
 loci_detection:
   # De-novo loci detection parameters
+  detection_scale_mode: 'joint' # 'independent': four models, each sharing locations only within its gain/loss pair
+  # In independent mode N_loci / N_loci_spacing apply to EACH scale; use a fresh output/null directory.
   loci_steps: 'fast' # Steps to run: 'full', 'fast', combine, single step, or space-separated steps
   N_loci: 100 # Number of loci to detect per chromosome (flat; ignored when N_loci_spacing is set)
   N_loci_spacing: null # If set, seed one locus per this many bp of searchable sequence

@@ -314,3 +314,40 @@ def test_parser_accepts_every_permutation_mode(monkeypatch, mode):
     monkeypatch.setattr(cli, 'main_permute', captured.append)
     cli.main()
     assert captured[0].mode == mode
+
+@pytest.mark.parametrize('execution', ['scatter', 'inline', 'pool'])
+def test_independent_mode_rejects_legacy_cache_before_invalidation(permutation_run,monkeypatch,execution):
+    args,cfg,root,events=permutation_run
+    cfg['loci_detection']['detection_scale_mode']='independent'
+    unit=root/'permutations'/'s1'
+    (unit/'data_per_length_scale').mkdir(parents=True)
+    # For whole-permutation/pool, this chromosome has no newly retained events.
+    chrom='chr1' if execution=='scatter' else 'chr2'
+    (unit/'data_per_length_scale'/f'{chrom}.pickle').write_bytes(b'legacy cache')
+    (root/permutation.NULL_FILENAME).write_text('original pooled null')
+    monkeypatch.setattr(permutation,'permute_events',lambda frame,**kw:(frame,1,0))
+    if execution=='scatter':
+        args.index,args.chrom=1,'chr1'
+    elif execution=='pool':
+        args.pool=True
+    with pytest.raises(ValueError,match='detection_scale_mode'):
+        cli.main_permute(args)
+    assert (root/permutation.NULL_FILENAME).read_text()=='original pooled null'
+
+@pytest.mark.parametrize('execution', ['scatter','inline'])
+def test_independent_mode_reaches_null_detector(permutation_run,monkeypatch,execution):
+    args,cfg,root,events=permutation_run
+    cfg['loci_detection']['detection_scale_mode']='independent'
+    seen=[]
+    monkeypatch.setattr(main_loci_functions,'run_loci_detection_per_chrom',
+                        lambda **kw:seen.append(kw['detection_scale_mode']))
+    def combine(**kw):
+        assert kw['detection_scale_mode']=='independent'
+        result=locus_frame().assign(length_scale='small',detection_scale_mode='independent')
+        return result,{},{},result
+    monkeypatch.setattr(main_loci_functions,'combine_loci',combine)
+    monkeypatch.setattr(permutation,'permute_events',lambda frame,**kw:(frame,1,0))
+    if execution=='scatter':
+        args.index,args.chrom=1,'chr1'
+    cli.main_permute(args)
+    assert seen==['independent']

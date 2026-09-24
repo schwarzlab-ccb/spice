@@ -12,6 +12,7 @@ import pandas as pd
 
 from spice import data_loaders
 from spice.length_scales import LENGTH_SCALE_NAMES
+from spice.scale_modes import table_mode, validate_table_mode
 from spice.logging import get_logger, log_debug
 
 logger = get_logger('spice.permutation')
@@ -49,8 +50,12 @@ def fitness_per_ls(loci_df):
 
 
 def fitness_statistic(loci_df):
-    """The tested statistic: mean over the four same-direction length scales."""
-    return fitness_per_ls(loci_df).mean(axis=1)
+    """Directional fitness: owning scale for independent loci, four-scale mean otherwise."""
+    values = fitness_per_ls(loci_df)
+    if table_mode(loci_df) == 'independent':
+        indices = [LENGTH_SCALE_NAMES.index(s) for s in loci_df.length_scale]
+        return values[np.arange(len(values)), indices]
+    return values.mean(axis=1)
 
 
 def _direction(loci_df):
@@ -339,6 +344,7 @@ def null_from_loci(loci_frames):
     """
     parts = []
     modes = set()
+    detection_modes = set()
     untagged = False
     bounds = arm_bounds()
     for df in loci_frames:
@@ -350,13 +356,19 @@ def null_from_loci(loci_frames):
             modes.update(df.permutation_mode.unique())
         else:
             untagged = True
+        detection_modes.add(table_mode(df))
         per_ls = fitness_per_ls(df)
         parts.append(pd.DataFrame({
             'chrom': df['chrom'].to_numpy(), 'direction': _direction(df),
             'arm': assign_arm(df['chrom'].to_numpy(), df['pos'].to_numpy(), bounds),
             'pos': df['pos'].to_numpy(float),
-            'stat': per_ls.mean(axis=1),
+            'stat': fitness_statistic(df),
             **{f'stat_{ls}': per_ls[:, j] for j, ls in enumerate(LENGTH_SCALE_NAMES)}}))
+        parts[-1]['detection_scale_mode'] = table_mode(df)
+        if table_mode(df) == 'independent':
+            parts[-1]['length_scale'] = df.length_scale.to_numpy()
+    if len(detection_modes) > 1:
+        raise ValueError('Cannot pool different detection_scale_mode values')
     if not parts:
         raise ValueError('no null loci: every permutation produced an empty loci table')
     if len(modes) > 1 or (modes and untagged):
@@ -396,6 +408,24 @@ def _strata(chrom, direction, arm, null_df, level):
 
 
 def permutation_p(loci_df, null_df, strategy='zpool', column='stat'):
+    """Calibrate each independent locus against null loci from its own scale."""
+    mode = table_mode(loci_df)
+    if mode is None:
+        return np.zeros(0)
+    validate_table_mode(null_df, mode)
+    if mode != 'independent':
+        return _permutation_p(loci_df, null_df, strategy, column)
+    result = np.full(len(loci_df), np.nan)
+    for scale in LENGTH_SCALE_NAMES:
+        indices = np.flatnonzero(loci_df.length_scale.to_numpy() == scale)
+        if not len(indices) or column not in ('stat', f'stat_{scale}'):
+            continue
+        reference = null_df[null_df.length_scale == scale]
+        result[indices] = _permutation_p(loci_df.iloc[indices], reference, strategy, f'stat_{scale}')
+    return result
+
+
+def _permutation_p(loci_df, null_df, strategy='zpool', column='stat'):
     """Empirical p of each observed locus against the pooled permutation null.
 
     `zpool` standardizes within (chromosome, direction, arm), then pools the standardized

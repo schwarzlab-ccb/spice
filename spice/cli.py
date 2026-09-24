@@ -504,10 +504,12 @@ def _check_permutation_chrom_mode(unit_dir, chrom, mode, write=False):
             handle.write('\n')
 
 
-def _check_permutation_combine_modes(unit_dir, mode):
+def _check_permutation_combine_modes(unit_dir, mode, detection_scale_mode="joint"):
     """Validate exactly the cache scope used by combine_loci, including eventless chromosomes."""
     from spice.main_loci_functions import cached_loci_chromosomes
+    from spice.scale_modes import check_cache_mode
     for chrom in cached_loci_chromosomes(unit_dir):
+        check_cache_mode(unit_dir, chrom, detection_scale_mode)
         _check_permutation_chrom_mode(unit_dir, chrom, mode)
 
 
@@ -535,12 +537,15 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
                 + (f', left {n_fixed:,} internal events fixed' if n_fixed else ''))
     unit_dir = _permutation_unit_dir(loci_results_dir, seed)
     # Reject leftover incompatible caches before invalidating tables or fitting.
-    _check_permutation_combine_modes(unit_dir, permute_mode)
+    _check_permutation_combine_modes(unit_dir, permute_mode, loci_params.get('detection_scale_mode', 'joint'))
     for chrom in chroms:
+        from spice.scale_modes import check_cache_mode
+        check_cache_mode(unit_dir, chrom, loci_params.get('detection_scale_mode', 'joint'))
         _check_permutation_chrom_mode(unit_dir, chrom, permute_mode, write=True)
     _invalidate_permutation_tables(loci_results_dir, seed)
     for chrom in chroms:
         run_loci_detection_per_chrom(
+            detection_scale_mode=loci_params.get('detection_scale_mode', 'joint'),
             final_events_df=processed, cur_chrom=chrom, which=steps,
             overwrite=args.overwrite,
             overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
@@ -567,9 +572,10 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
             th_locus_prominence=loci_params['th_locus_prominence'],
             th_locus_mean_fitness=loci_params['th_locus_mean_fitness'],
         )
-    _check_permutation_combine_modes(unit_dir, permute_mode)
+    _check_permutation_combine_modes(unit_dir, permute_mode, loci_params.get('detection_scale_mode', 'joint'))
     loci_df, _, _, _ = combine_loci(loci_results_dir=unit_dir, processed_events=processed,
-                                 calculate_p_value=False, mode='detection')
+                                 calculate_p_value=False, mode='detection',
+                                 detection_scale_mode=loci_params.get('detection_scale_mode', 'joint'))
     loci_df['permutation_mode'] = permute_mode
     out = os.path.join(unit_dir, 'unit_loci.tsv')
     loci_df.to_csv(out, sep='\t', index=False)
@@ -676,13 +682,16 @@ def main_permute(args):
                     raw_for_pool = load_final_events()
                 processed, _, _ = permutation.prepare_permutation_events(
                     raw_for_pool, seed=derive_seed('permutation', idx), mode=mode, loci_params=loci_params)
-                _check_permutation_combine_modes(d, mode)
+                _check_permutation_combine_modes(d, mode, loci_params.get('detection_scale_mode', 'joint'))
                 loci_df, _, _, _ = combine_loci(loci_results_dir=d, processed_events=processed,
-                                             calculate_p_value=False, mode='detection')
+                                             calculate_p_value=False, mode='detection',
+                                             detection_scale_mode=loci_params.get('detection_scale_mode', 'joint'))
                 loci_df['permutation_mode'] = mode
                 loci_df.to_csv(f, sep='\t', index=False)
             unit_frame = pd.read_csv(f, sep='\t')
             permutation.validate_null_mode(unit_frame, mode)
+            from spice.scale_modes import validate_table_mode
+            validate_table_mode(unit_frame, loci_params.get('detection_scale_mode', 'joint'))
             # Untagged historical units remain usable with legacy modes only.
             unit_frame['permutation_mode'] = mode
             frames.append(unit_frame)
@@ -706,6 +715,8 @@ def main_permute(args):
         logger.info(f'Permutation s{args.index} ({mode}): moved {n_moved:,} internal events'
                     + (f', left {n_fixed:,} internal events fixed' if n_fixed else ''))
         unit_dir = _permutation_unit_dir(loci_results_dir, args.index)
+        from spice.scale_modes import check_cache_mode
+        check_cache_mode(unit_dir, args.chrom, loci_params.get('detection_scale_mode', 'joint'))
         _check_permutation_chrom_mode(unit_dir, args.chrom, mode, write=True)
         _invalidate_permutation_tables(loci_results_dir, args.index)
         _detect_one(run_loci_detection_per_chrom, processed, args.chrom, steps, loci_params,
@@ -734,6 +745,7 @@ def _detect_one(run_loci_detection_per_chrom, processed, chrom, steps, loci_para
                 config, args):
     """One chromosome of detection into `out_dir`, with the run's own detection parameters."""
     run_loci_detection_per_chrom(
+        detection_scale_mode=loci_params.get('detection_scale_mode', 'joint'),
         final_events_df=processed, cur_chrom=chrom, which=steps, overwrite=args.overwrite,
         overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
         name=config['name'], N_loci=loci_params['N_loci'],
@@ -863,6 +875,7 @@ def main_loci_detection(args):
             continue
         logger.info(f'Processing {chrom}...')
         run_loci_detection_per_chrom(
+            detection_scale_mode=loci_params.get('detection_scale_mode', 'joint'),
             final_events_df=processed_events,
             cur_chrom=chrom,
             which=steps_to_run,
@@ -918,6 +931,8 @@ def main_loci_detection(args):
         if os.path.exists(null_path) and not args.overwrite:
             null_df = pd.read_csv(null_path, sep='\t')
             permutation.validate_null_mode(null_df, p_values_permute_mode)
+            from spice.scale_modes import validate_table_mode
+            validate_table_mode(null_df, loci_params.get('detection_scale_mode', 'joint'))
             logger.info(f'Loaded permutation null: {len(null_df):,} loci from {null_path}')
         else:
             logger.info(f'No permutation null at {null_path}; building it inline (K={p_values_K})')
@@ -939,6 +954,7 @@ def main_loci_detection(args):
         p_values_strategy=p_values_strategy,
         overwrite=args.overwrite,
         mode='detection',
+        detection_scale_mode=loci_params.get('detection_scale_mode', 'joint'),
         final_reoptimization_N_iterations=loci_params['final_reoptimization_N_iterations'],
     )
 
@@ -1017,6 +1033,8 @@ def main_loci_assignment(args):
     
     # Get loci assignment parameters from config
     loci_params = config['loci_detection']
+    if loci_params.get('detection_scale_mode', 'joint') != 'joint':
+        raise ValueError('Independent scales currently require loci_detection, not loci_assignment')
     final_events_df = load_final_events()
 
     logger.info('Processing final events for loci detection')

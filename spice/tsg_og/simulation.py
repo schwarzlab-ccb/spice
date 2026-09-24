@@ -525,4 +525,5 @@ def convolution_simulation_per_ls(cur_chrom, data_per_length_scale, cur_selectio
                 normalize_from_signal=normalize_from_signal, cur_signal=data['signals'],
                 legacy_height_multiplier=legacy_height_multiplier,
                 height_multiplier=None if legacy_height_multiplier else data['height_multiplier'])
+            if data.get('fit_active', True) else np.zeros_like(data['signals'])
             for data, cur_sp in zip(data_per_length_scale.values(), cur_selection_points)]

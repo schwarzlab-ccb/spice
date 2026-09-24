@@ -155,16 +155,20 @@ class TestParallelPattern:
 
 
 
-def test_detection_matches_with_cold_partial_and_warm_preprocessing_cache(tmp_path, repo_root_dir):
+@pytest.mark.parametrize("detection_scale_mode", ["joint", "independent"])
+def test_detection_matches_with_cold_partial_and_warm_preprocessing_cache(tmp_path, repo_root_dir, detection_scale_mode):
     """Exercise real bootstrap/kernel sampling and fitting, including stage resumption."""
-    from pathlib import Path
     import pandas as pd
-    from spice.main_loci_functions import (process_final_events_for_loci_routines,
-                                          run_loci_detection_per_chrom)
-    raw = pd.read_csv(Path(repo_root_dir) / 'data/pcawg_final_events_chr1_chr2.tsv',
-                      sep='\t', dtype={'diff': str}).query('chrom == "chr1"')
-    events = process_final_events_for_loci_routines(final_events_df=raw, remove_plateaus=False)
+    from spice.main_loci_functions import run_loci_detection_per_chrom
+    # A small processed cohort makes this test self-contained; no external PCAWG files.
+    events = pd.DataFrame([
+        dict(chrom='chr1', sample=f'sample{i}', pos='internal', type=direction,
+             start=20_000_000 + i*3_000_000, end=20_000_000 + i*3_000_000 + width,
+             width=width, plateau='neither_left_nor_right')
+        for width in (500_000, 2_000_000, 5_000_000, 20_000_000)
+        for direction in ('gain', 'loss') for i in range(6)])
     options = dict(final_events_df=events, cur_chrom='chr1', name='cache_test', N_loci=2,
+                   detection_scale_mode=detection_scale_mode,
                    loci_results_dir=str(tmp_path), N_bootstrap=2, N_kernel=100,
                    overwrite=True, overwrite_preprocessing=False,
                    detection_N_iterations_base=5, detection_max_N_iterations=10,
@@ -173,8 +177,12 @@ def test_detection_matches_with_cold_partial_and_warm_preprocessing_cache(tmp_pa
 
     def fit(which):
         set_seed(42)
-        result = run_loci_detection_per_chrom(which=which, **options)['flipping']
-        return np.array([[(p[0].pos, p[0].fitness) for p in track] for track in result])
+        result = run_loci_detection_per_chrom(which=which, **options)
+        if detection_scale_mode == 'independent':
+            return np.concatenate([
+                np.array([[(p[0].pos, p[0].fitness) for p in track] for track in part['flipping']]).reshape(-1)
+                for part in result['scales'].values()])
+        return np.array([[(p[0].pos, p[0].fitness) for p in track] for track in result['flipping']])
 
     stages = ['detection', 'flipping']
     cold = fit(stages)
@@ -184,3 +192,19 @@ def test_detection_matches_with_cold_partial_and_warm_preprocessing_cache(tmp_pa
     np.testing.assert_array_equal(cold, fit(stages))
     # Resume after a persisted detection instead of consuming its RNG draws in-process.
     np.testing.assert_array_equal(cold, fit('flipping'))
+
+    if detection_scale_mode == 'independent':
+        from spice.utils import open_pickle
+        other_root = tmp_path / 'changed_small_events'
+        changed_events = pd.concat([events, events.query('width == 500000 and type == "gain"')],
+                                   ignore_index=True)
+        set_seed(42)
+        run_loci_detection_per_chrom(which=stages, **dict(
+            options, final_events_df=changed_events, loci_results_dir=str(other_root)))
+        # Changing small-gain event counts must not move any other scale's fitted loci.
+        # This exercises native bootstrap draws, kernels and fitting, without mocks.
+        for scale in ('mid1', 'mid2', 'large'):
+            def saved_fit(root):
+                tracks = open_pickle(str(root / 'detection' / 'chr1' / scale / 'flipping.pickle'))
+                return [[(point[0].pos, point[0].fitness) for point in track] for track in tracks]
+            assert saved_fit(tmp_path) == saved_fit(other_root)

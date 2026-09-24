@@ -597,3 +597,5 @@ Hybrid permutation combination validates mode markers for every chromosome cache
 that `combine_loci` will load, including chromosomes absent from the current
 processed event frame. Pooling and inline combination share the same cache
 enumeration as `combine_loci`; incompatible leftovers are rejected before use.
+
+See [independent length-scale detection](doc/independent_length_scales.md) for four gain/loss-paired models and scale-matched null scoring.

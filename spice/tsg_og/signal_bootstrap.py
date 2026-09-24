@@ -42,7 +42,7 @@ def bootstrap_sampling_of_signal(
         segment_size_dict=DEFAULT_SEGMENT_SIZE_DICT,
         length_scale_boundaries=DEFAULT_LENGTH_SCALE_BOUNDARIES,
         N_bootstrap=1_000,
-        filter_plateaus=True, disable_tqdm=True):
+        filter_plateaus=True, disable_tqdm=True, independent_scales=False):
     """
     Perform bootstrap sampling for a single chromosome and return the results.
 
@@ -69,6 +69,9 @@ def bootstrap_sampling_of_signal(
         log_debug(logger, f"Bootstrap iteration {iteration + 1}/{N_bootstrap} for chromosome {cur_chrom}")
         cur_bootstrap_signals = []
         for cur_length_scale, cur_type in itertools.product(['small', 'mid1', 'mid2', 'large'], ['gain', 'loss']):
+            if independent_scales:
+                seed_task(derive_seed('signal_bootstrap', cur_chrom, N_bootstrap,
+                                      cur_length_scale, cur_type, iteration))
             cur_length_scale_border = length_scale_boundaries[cur_length_scale]
             cur_events = final_events_df.query('pos == "internal" and type == @cur_type and chrom == @cur_chrom and width > @cur_length_scale_border[0] and width <= @cur_length_scale_border[1]').reset_index().copy()
 

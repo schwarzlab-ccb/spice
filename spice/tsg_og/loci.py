@@ -229,6 +229,10 @@ def calc_prominence(cur_chrom, data_per_length_scale, cur_loci_df=None, selectio
         for cur_type in ['gain', 'loss']:
             ls_i += 1
 
+            if not data_per_length_scale[(cur_length_scale, cur_type)].get('fit_active', True):
+                direction = 'OG' if cur_type == 'gain' else 'TSG'
+                cur_loci_df[f'prominence_{direction}_{cur_length_scale}'] = 0.
+                continue
             cur_kernel_size = data_per_length_scale[(cur_length_scale, cur_type)]['loci_width']
 
             if calc_on == 'data':
@@ -484,7 +488,8 @@ def calc_overlap_pairs(loci_1, loci_2):
 def assign_p_values(loci_df, null_df, strategy='zpool'):
     """Assign the FITNESS p-value to loci from the POSITIONAL-PERMUTATION null.
 
-    The tested statistic is the mean optimized fitness over the four same-direction length scales.
+    Joint loci use the mean fitness over four same-direction scales. Independent loci use
+    their owning scale only, with a scale-matched null and one global BH family.
     `null_df` is the pooled null written by `spice permute` (see spice.tsg_og.permutation): one row
     per locus that detection found on a positionally-permuted copy of the cohort, so null and
     observed loci come out of the identical detection cascade.
@@ -506,13 +511,22 @@ def assign_p_values(loci_df, null_df, strategy='zpool'):
     log_debug(logger, f'Assigning fitness p-values to {len(loci_df)} loci from a permutation null '
                       f'of {len(null_df)} loci (strategy={strategy})')
 
+    from spice.scale_modes import table_mode
     loci_df = loci_df.copy()
     loci_df['p_value_raw'] = permutation_p(loci_df, null_df, strategy, column='stat')
     for ls in LENGTH_SCALE_NAMES:
         loci_df[f'p_value_raw_{ls}'] = permutation_p(loci_df, null_df, strategy,
                                                      column=f'stat_{ls}')
 
-    loci_df['p_value'] = false_discovery_control(loci_df['p_value_raw'].values)
+    loci_df['p_value'] = (false_discovery_control(loci_df['p_value_raw'].values)
+                          if len(loci_df) else np.zeros(0))
+    if table_mode(loci_df) == 'independent' or not len(loci_df):
+        # One hypothesis per independently detected locus; a single BH family across scales.
+        for ls in LENGTH_SCALE_NAMES:
+            loci_df[f'p_value_{ls}'] = np.where(
+                loci_df.get('length_scale', pd.Series(index=loci_df.index, dtype=str)) == ls,
+                loci_df['p_value'], np.nan)
+        return loci_df
     loci_df[[f'p_value_{ls}' for ls in LENGTH_SCALE_NAMES]] = np.reshape(false_discovery_control(
         loci_df[[f'p_value_raw_{ls}' for ls in LENGTH_SCALE_NAMES]].values, axis=None), (-1, 4))
     return loci_df

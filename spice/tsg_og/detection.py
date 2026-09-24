@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from spice import data_loaders, directories, config
+from spice.scale_modes import active_tracks, scale_seed_key
 from spice.utils import open_pickle, CALC_NEW
 from spice.logging import log_debug, get_logger
 from spice.random_state import derive_seed, np_rng, seed_task
@@ -41,15 +42,15 @@ def _prepare_mse_terms(data_per_length_scale):
     """
     return [(data['non_centromere_index'],
              data['signals'][data['non_centromere_index']],
-             data['cur_loss_norm'])
+             data['cur_loss_norm']) if data.get('fit_active', True) else None
             for data in data_per_length_scale.values()]
 
 
 def calc_mse_loss_prepared(mse_terms, cur_conv_simulated):
     """calc_mse_loss evaluated against terms from _prepare_mse_terms. Same value, same order."""
     return sum([np.mean((sig_masked - generated_signal[non_centromere_index]) ** 2) / cur_loss_norm
-                for (non_centromere_index, sig_masked, cur_loss_norm), generated_signal
-                in zip(mse_terms, cur_conv_simulated)])
+                for term, generated_signal in zip(mse_terms, cur_conv_simulated) if term is not None
+                for non_centromere_index, sig_masked, cur_loss_norm in [term]])
 
 
 def calc_mse_loss(data_per_length_scale, cur_conv_simulated):
@@ -143,7 +144,8 @@ def collect_data_per_length_scale(
         loci_results_dir=None,
         assert_non_empty=True,
         N_bootstrap=1_000,
-        N_kernel=100_000
+        N_kernel=100_000,
+        independent_scales=False,
         ):
     # Kernel simulations must not inherit whether bootstrap signals were cached.
     seed_task(derive_seed('collect_data_per_length_scale', cur_chrom, N_bootstrap, N_kernel))
@@ -161,6 +163,19 @@ def collect_data_per_length_scale(
         log_debug(logger, f'Processing length scale {cur_length_scale} and type {cur_type} for chromosome {cur_chrom}')
         cur_widths = get_cur_widths(
             final_events_df, cur_chrom, cur_length_scale=cur_length_scale, cur_type=cur_type)
+        if independent_scales:
+            seed_task(derive_seed('collect_data_per_length_scale', cur_chrom, N_bootstrap,
+                                  N_kernel, cur_length_scale, cur_type))
+        if len(cur_widths) == 0 and independent_scales:
+            # Empty tracks are a zero baseline, not a reason to drop the paired model.
+            signals = np.zeros_like(signal_bootstrap_bounds[ls_i][0])
+            data_per_length_scale[(cur_length_scale, cur_type)] = dict(
+                chrom=cur_chrom, signals=signals, cur_widths=cur_widths, loci_width=4,
+                length_scale=cur_length_scale, type=cur_type, length_scale_i=ls_i,
+                non_centromere_index=np.arange(len(signals)), cur_loss_norm=1.0,
+                kernel=np.zeros(1), height_multiplier=np.ones_like(signals),
+                centromere_values={}, signal_bounds=signal_bootstrap_bounds[ls_i])
+            continue
         if len(cur_widths) == 0:
             if assert_non_empty:
                 raise ValueError(f'No events found for {cur_chrom}, {cur_length_scale}, {cur_type}')
@@ -193,6 +208,8 @@ def collect_data_per_length_scale(
         non_centromere_index = np.setdiff1d(np.arange(len(signals)), np.arange(centro_start_i, centro_end_i))
         
         cur_loss_norm = np.mean(signals[non_centromere_index])
+        if independent_scales and (not np.isfinite(cur_loss_norm) or cur_loss_norm <= 0):
+            cur_loss_norm = 1.0
         
         # Use tuple (cur_length_scale, cur_type) as dictionary key
         data_per_length_scale[(cur_length_scale, cur_type)] = {
@@ -289,6 +306,18 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
     if allowed_fitness_change is None:
         allowed_fitness_change = np.ones((8, len(best_selection_points_per_cluster)))
     assert allowed_fitness_change.shape == (8, len(best_selection_points_per_cluster)), (allowed_fitness_change.shape, len(best_selection_points_per_cluster))
+    allowed_fitness_change = allowed_fitness_change.copy()
+    active = active_tracks(data_per_length_scale)
+    if len(active) != 8:
+        inactive = np.setdiff1d(np.arange(8), active)
+        if any(locus.fitness != 0 for cluster in best_selection_points_per_cluster
+               for i in inactive for locus in cluster[i]):
+            raise ValueError('Inactive tracks must have zero fitness in an independent model')
+    allowed_fitness_change[np.setdiff1d(np.arange(8), active), :] = False
+    if len(active) != 8:
+        for i in active:
+            if len(list(data_per_length_scale.values())[i]['cur_widths']) == 0:
+                allowed_fitness_change[i, :] = False
     if ls_to_optimize is not None:
         allowed_fitness_change[np.setdiff1d(np.arange(8), ls_to_optimize), :] = False
     if not isinstance(max_fitness, (list, np.ndarray)):
@@ -353,6 +382,7 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
             if generated_signals[0] is not None and np_rng().random_sample() < 0.5:
                 fitness_diff = np.array([(data['signals'] - generated_signal)[int(cur_cluster_pos // segment_size_dict[data['length_scale']])] / 
                                         (data['signals'][int(cur_cluster_pos // segment_size_dict[data['length_scale']])] + 1e-10)
+                                        if data.get('fit_active', True) else 0
                                          for data, generated_signal in
                                          zip(data_per_length_scale.values(), generated_signals)])
             else:
@@ -390,6 +420,8 @@ def _optimize_selection_points(N_iterations, best_selection_points_per_cluster, 
         else:
             changed_ls = np.where(fitness_change != 0)[0]
 
+        if len(active) != 8:
+            changed_ls = np.intersect1d(changed_ls, active)
         for ls in changed_ls:
             data = list(data_per_length_scale.values())[ls]
             cur_sp = cur_selection_points[ls]
@@ -568,7 +600,7 @@ def detect_tsgs_ogs_for_all_length_scales(
         within_ci_all_ls_upsampled = [np.repeat(cur_res, data['signal_upsampling']) for cur_res, data in zip(within_ci_all_ls, data_per_length_scale.values())]
         cur_pad_width = [(len(within_ci_all_ls_upsampled[0])-len(cur_res)) for cur_res in within_ci_all_ls_upsampled]
         within_ci_all_ls_upsampled = [np.pad(cur_res, (pad // 2 + pad % 2, pad // 2)) for cur_res, pad in zip(within_ci_all_ls_upsampled, cur_pad_width)]
-        within_ci_all_ls_final = np.all(np.stack(within_ci_all_ls_upsampled), axis=0).astype(bool)
+        within_ci_all_ls_final = np.all(np.stack(within_ci_all_ls_upsampled)[active_tracks(data_per_length_scale)], axis=0).astype(bool)
         cur_residuals_abs_sum[within_ci_all_ls_final] = 0
 
         if cur_residuals_abs_sum.max() == 0:
@@ -609,6 +641,10 @@ def detect_tsgs_ogs_for_all_length_scales(
     
     log_debug(logger, f"Detection for chromosome {cur_chrom} completed and saved.")
     
+    if len(active_tracks(data_per_length_scale)) != 8:
+        # The initial background-only SelectionPoints carries no locus.
+        keep = [i for i, point in enumerate(best_selection_points[0]) if len(point)]
+        best_selection_points = [[track[i] for i in keep] for track in best_selection_points]
     return best_selection_points, total_losses, total_selection_points
 
 
@@ -637,6 +673,8 @@ def flip_up_down_assignment(
     conv_below_signal = [np.clip(data['signal_bounds'][0] - cur_conv, 0, None)
                 for cur_conv, data in zip(simulated_conv, data_per_length_scale.values())]
 
+    if not final_selection_points[0]:
+        return final_selection_points
     up_down_deviation_neighborhood = []
     for cluster_i in range(len(final_selection_points[0])):
 
@@ -646,8 +684,8 @@ def flip_up_down_assignment(
         cur_left_i = [max(0, p - int(data['loci_width'] / 4)) for data, p in zip(data_per_length_scale.values(), cur_pos_bin)]
         cur_right_i = [min(len(data['signals']), p + int(data['loci_width'] / 4)) for data, p in zip(data_per_length_scale.values(), cur_pos_bin)]
 
-        max_above = [max(a[l:r]) for a, l, r in zip(conv_below_signal, cur_left_i, cur_right_i)]
-        max_below = [max(b[l:r]) for b, l, r in zip(conv_above_signal, cur_left_i, cur_right_i)]
+        max_above = [max(a[l:r], default=0) for a, l, r in zip(conv_below_signal, cur_left_i, cur_right_i)]
+        max_below = [max(b[l:r], default=0) for b, l, r in zip(conv_above_signal, cur_left_i, cur_right_i)]
         if is_up:
             cur_up_down_deviation_neighborhood = [max_below[i] if i % 2 == 0 else max_above[i] for i in range(8)]
         else:
@@ -656,7 +694,9 @@ def flip_up_down_assignment(
         up_down_deviation_neighborhood.append(cur_up_down_deviation_neighborhood)
     up_down_deviation_neighborhood = np.stack(up_down_deviation_neighborhood)
     
-    total_up_down_deviation_neighborhood = up_down_deviation_neighborhood[:, :4].max(axis=1)
+    total_up_down_deviation_neighborhood = up_down_deviation_neighborhood[:,
+        (slice(None, 4) if len(active_tracks(data_per_length_scale)) == 8
+         else active_tracks(data_per_length_scale))].max(axis=1)
     total_up_down_deviation_neighborhood[total_up_down_deviation_neighborhood < 5] = 0
 
     candidate_loci = np.argsort(total_up_down_deviation_neighborhood)[::-1][:np.sum(total_up_down_deviation_neighborhood!=0)]
@@ -747,6 +787,8 @@ def rank_loci(
 
     assert all([x['chrom']==cur_chrom for x in data_per_length_scale.values()]), f'Wrong data_per_length_scale for current chrom {cur_chrom}'
 
+    if not best_selection_points[0]:
+        return [(best_selection_points, 0.0, [])]
     if optimized_locus_iterations is None:
         optimized_locus_iterations = []
         fixed_cluster_i = []
@@ -769,7 +811,7 @@ def rank_loci(
                 return None, None
 
             # Seeded per (chrom, iteration, cluster) for deterministic results across parallelization and runs
-            seed_task(derive_seed('rank_loci', cur_chrom, iteration, cluster_i))
+            seed_task(derive_seed('rank_loci', scale_seed_key(cur_chrom, data_per_length_scale), iteration, cluster_i))
 
             cur_selection_points = [[x[cluster_i]] for x in best_selection_points]
             cur_selection_points = copy_list_of_selection_points([list(x) + list(y) for x, y in zip(fixed_clusters, cur_selection_points)])
@@ -888,6 +930,8 @@ def within_ci_fitness_filter(
         zero_conv = convolution_simulation_per_ls(cur_chrom, data_per_length_scale, cur_zero_selection_points)
         for i, (data, cur_zero_conv, cur_base_conv) in enumerate(
             zip(data_per_length_scale.values(), zero_conv, base_conv)):
+            if not data.get('fit_active', True):
+                continue
             
             cur_pos_i = int(np.round(cur_pos / segment_size_dict[data['length_scale']], 0))
             cur_loci_width_i = int(data['loci_width'] / 4)
@@ -895,6 +939,8 @@ def within_ci_fitness_filter(
             right_i = min(len(data['signals']), cur_pos_i + cur_loci_width_i)
             cur_indices = np.intersect1d(np.arange(left_i, right_i), data['non_centromere_index'])
 
+            if not len(cur_indices):
+                continue
             old_within_ci = np.mean(np.logical_and(
                 cur_base_conv < data['signal_bounds'][1],
                 cur_base_conv > data['signal_bounds'][0])[cur_indices])
@@ -991,6 +1037,8 @@ def limiting_fitness(
 
     best_selection_points = [list(x) for x in copy_list_of_selection_points(raw_selection_points)]
     for ls_i in ls_i_to_check:
+        if ls_i not in active_tracks(data_per_length_scale):
+            continue
 
         raw_conv = convolution_simulation_per_ls(
             cur_chrom, data_per_length_scale, best_selection_points, segment_size_dict=segment_size_dict)
@@ -1185,7 +1233,7 @@ def infer_loci_widths(
         cur_chrom, data_per_length_scale, final_selection_points, segment_size_dict=segment_size_dict)
 
     def __optimize_for_bootstrap_iteration(bootstrap_iteration, cluster_i):
-        seed_task(derive_seed('infer_loci_widths', cur_chrom, cluster_i, bootstrap_iteration))
+        seed_task(derive_seed('infer_loci_widths', scale_seed_key(cur_chrom, data_per_length_scale), cluster_i, bootstrap_iteration))
         mod_data_per_length_scale = deepcopy(data_per_length_scale)
         for ls_i in range(8):
             ls_key = list(mod_data_per_length_scale.keys())[ls_i]
@@ -1274,7 +1322,8 @@ def merge_overlapping_loci(
     log_debug(logger, f'Merging overlapping loci for {cur_chrom}')
 
     assert all([x['chrom']==cur_chrom for x in data_per_length_scale.values()]), f'Wrong data_per_length_scale for current chrom {cur_chrom}'
-    assert len(selection_points[0]) > 0, f'No selection points for {cur_chrom}!'
+    if not selection_points[0]:
+        return selection_points, convolution_simulation_per_ls(cur_chrom, data_per_length_scale, selection_points), pd.DataFrame(), []
     assert len(selection_points[0]) == len(loci_widths), f'Number of selection points ({len(selection_points[0])}) and locus widths ({len(loci_widths)}) do not match!'
 
     loci_df = create_loci_df({cur_chrom: selection_points}, {cur_chrom: loci_widths}, nr_stds_widths=nr_stds_widths).sort_values('rank_on_chrom')
@@ -1612,7 +1661,7 @@ def _identify_loci_to_filter(
     log_debug(logger, f'Removing loci based on locus prominence: {np.sum(~locus_prominence_bool)} out of {len(locus_prominence_bool)} loci')
 
     ## Filter based on mean directed fitness across length scales
-    mean_directed_fitness = 2*np.maximum(cur_fitness, 0).mean(axis=1)
+    mean_directed_fitness = 2*np.maximum(cur_fitness[:, active_tracks(data_per_length_scale)], 0).mean(axis=1)
     locus_mean_fitness_bool = mean_directed_fitness > th_locus_mean_fitness
     log_debug(logger, f'Removing loci based on mean directed fitness: {np.sum(~locus_mean_fitness_bool)} out of {len(locus_mean_fitness_bool)} loci')
 
@@ -1622,7 +1671,9 @@ def _identify_loci_to_filter(
         final_events_df=final_events_df,
         cur_selection_points=final_selection_points
     )
-    total_added_events = np.stack([x[:-1] for x in added_events.values()]).sum(axis=0)
+    total_added_events = np.stack([x[:-1] if np.ndim(x) else np.zeros(len(cur_fitness))
+                                   for i, x in enumerate(added_events.values())
+                                   if i in active_tracks(data_per_length_scale)]).sum(axis=0)
     log_debug(logger, f'Removing loci based on added events: {np.sum(total_added_events < th_added_events)} out of {len(total_added_events)} loci')
 
     # Combine all filters
