@@ -119,6 +119,72 @@ Rerunning a permutation unit invalidates its combined table and the pooled null.
 once all units finish. `spice permute --config <config> --pool --overwrite` also forces
 recombination of existing per-chromosome results, without rerunning detection.
 
+An opt-in chromosome-wide null is available with:
+
+```yaml
+loci_detection:
+  p_values_permute_mode: chromosome_hybrid
+  p_values_strategy: zpool_chrom
+```
+
+Events no longer than the shorter usable arm must fit wholly in either arm.
+Longer events may also span the centromere, preserving physical width with both
+endpoints outside the gap. A chromosome with one usable arm stays within that
+arm. Starts are sampled uniformly over legal integer coordinates, independently
+per event; sample/direction/widths are retained but event spacing is not. Events
+with no legal placement remain fixed and are counted in the log.
+
+Hybrid mode preprocesses the observed events first, then randomizes the retained
+set without filtering it again. This keeps newly spanning events in the null.
+Use `zpool_chrom` or `perchrom`; `zpool` would condition on arm membership again
+and is rejected. Use a fresh output directory/null. Mode-tagged tables and
+per-chromosome cache markers prevent mixing old arm-restricted results into the
+new null. This is implemented and unit-tested, not yet empirically calibrated.
+`--mode chromosome_hybrid` is also accepted by `spice permute`, but the config
+must use the corresponding chromosome scoring strategy.
+
+An alternative opt-in mode, `chromosome_exclusion`, removes the shorter-arm
+length threshold:
+
+```yaml
+loci_detection:
+  p_values_permute_mode: chromosome_exclusion
+  p_values_strategy: zpool_chrom
+```
+
+For an event with coordinate span `L = end - start` and centromere interior
+`(Cstart, Cend)`, exclude start positions in `(Cstart, Cend)` or in
+`(Cstart - L, Cend - L)`. Draw uniformly from all remaining integer starts where
+the complete event fits within the observed chromosome bounds. Thus neither
+endpoint can fall inside the centromere, while events of any length can span it
+if their geometry permits. Contact with the centromere boundaries is allowed.
+The stored model width is preserved even when it differs from the coordinate span.
+One usable arm restricts placement to that arm; events with no legal placement
+remain fixed and are logged. Non-internal events remain unchanged.
+
+Like hybrid mode, this mode preprocesses before permutation and requires
+`zpool_chrom` or `perchrom`. Use a fresh output directory and generate a fresh,
+mode-tagged null when enabling it; hybrid, legacy, and exclusion caches cannot be
+mixed. `spice permute --mode chromosome_exclusion` is also supported. The default
+remains `rotate`; implementing this mode does not replace existing nulls. Placement
+and workflow tests use synthetic fixtures; empirical calibration is pending.
+
+The CLI/config default is `loci_detection.N_bootstrap: 100` for the signal's
+2.5% and 97.5% bootstrap quantiles. This is a runtime/storage compromise; use
+`1000` for more stable tail estimates when resources permit. Signal resampling
+work and stored bootstrap arrays grow approximately linearly with this count,
+so 1000 costs about ten times as much as 100 for that stage, not for the entire
+pipeline. `N_bootstrap_for_widths` remains 10: increasing the signal count does
+not increase the number of width-fitting optimizations. Signal bounds also
+participate in detection/filtering, so changing the count can change fitted peaks
+and downstream runtime, not just the reported CI score.
+
+Apply a changed count to a fresh run/output directory with matching observed and
+null settings. The bootstrap filename contains the count, but the derived
+`data_per_length_scale/<chrom>.pickle` filename does not; resuming old caches
+could retain the old bounds. Existing saved runs and frozen source snapshots
+keep their original settings.
+
 Loci preprocessing and each fitting stage use separate random streams. With the same
 inputs, parameters, and seed, rebuilding a stage gives the same result whether preceding
 stages were computed, cached, or loaded during a resumed run. When changing the seed,
@@ -472,6 +538,15 @@ spice plotting --config <path/to/config> --plot-single-locus 3 --loci-mode detec
   tables used for detection or assignment.
 - Output PNGs are saved to `plot_dir/{name}/` (see `directories.plot_dir` in config; defaults to `plots/`).
 
+Detection plots use the saved combined fit (`detection/final_loci_detection_filtered.pickle`)
+when available, matching the final table and within-CI scores. Before combination,
+they use the original chromosome fit. An empty combined fit remains empty in the plot.
+Single-locus plots translate original ranks to positions among the surviving peaks.
+
+Combination only reoptimizes chromosomes where q-value or mean-fitness filtering
+removed peaks. If every peak is retained, the original fitness is kept. P/q values
+remain the scores calculated before this optional refit.
+
 For interactive exploration, see `notebooks/loci_plotting.ipynb`.
 
 ---
@@ -511,3 +586,14 @@ GNU GENERAL PUBLIC LICENSE
 ## 11. Contact
 
 For questions and issues, please contact tom.kaufmann@iccb-cologne.org or roland.schwarz@iccb-cologne.org.
+
+
+Hybrid permutation uses `end-start` for placement geometry and preserves the
+input `width` separately. Imported event tables may contain different values;
+SPICE uses the stored width for length-scale/kernel modeling, so permutation
+must neither overwrite it nor stretch the original coordinate span to match it.
+
+Hybrid permutation combination validates mode markers for every chromosome cache
+that `combine_loci` will load, including chromosomes absent from the current
+processed event frame. Pooling and inline combination share the same cache
+enumeration as `combine_loci`; incompatible leftovers are rejected before use.

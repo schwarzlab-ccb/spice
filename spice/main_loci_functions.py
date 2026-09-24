@@ -607,6 +607,12 @@ def run_loci_detection_per_chrom(
     return RESULTS
 
 
+def cached_loci_chromosomes(loci_results_dir):
+    """Chromosome caches consumed by combination, independent of retained events."""
+    return [chrom for chrom in CHROMS[:-1]
+            if os.path.exists(os.path.join(loci_results_dir, 'data_per_length_scale', f'{chrom}.pickle'))]
+
+
 @CALC_NEW()
 def combine_loci(
     loci_results_dir: str,
@@ -623,9 +629,9 @@ def combine_loci(
     """
     Combine results from all chromosomes after loci detection or assignment
     
-    Loads final selection points and peak widths from all chromosomes. If overwrite=True,
-    runs full_filter_by_p_values to filter by significance. Otherwise uses all loci
-    without p-value filtering.
+    Loads final selection points and peak widths from all chromosomes. When
+    calculate_p_value=True, scores and filters loci, then refits only chromosomes
+    where filtering removed loci. Chromosomes retaining every locus keep their fit.
     
     Parameters
     ----------
@@ -645,12 +651,8 @@ def combine_loci(
     all_loci_widths = {}
     all_data_per_length_scale = {}
 
-    for i, cur_chrom in enumerate(CHROMS[:-1], 1):
-        
-        # Check if data_per_length_scale file exists (indicator that chromosome was processed)
+    for cur_chrom in cached_loci_chromosomes(loci_results_dir):
         data_per_length_scale_file = os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle')
-        if not os.path.exists(data_per_length_scale_file):
-            continue
         logger.info(f"Loading results for {cur_chrom}")
         
         # Load final selection points
@@ -729,9 +731,12 @@ def combine_loci(
         final_loci_df = final_loci_df.assign(_keep=keep_all)
         filtered_selection_points = dict()
         filtered_loci_widths = dict()
+        changed_chromosomes = set()
         for cur_chrom in list(all_selection_points.keys()):
             keep = (final_loci_df.query('chrom == @cur_chrom')
                                  .sort_values('rank_on_chrom')['_keep'].to_numpy())
+            if not keep.all():
+                changed_chromosomes.add(cur_chrom)
             filtered_selection_points[cur_chrom] = [
                 [x for i, x in enumerate(track) if keep[i]] for track in all_selection_points[cur_chrom]]
             filtered_loci_widths[cur_chrom] = [
@@ -740,12 +745,15 @@ def combine_loci(
 
         # Dropping non-significant loci leaves the survivors' fitness stale for the reduced model.
         # Refit them (positions frozen) with the same per-locus-neighborhood optimizer as used before
-        n_to_reoptimize = sum(len(v[0]) for v in filtered_selection_points.values())
-        logger.info(f'Reoptimizing fitness of {n_to_reoptimize} surviving loci after p-value '
-                    f'filtering ({final_reoptimization_N_iterations} iterations/locus-neighborhood)')
+        n_to_reoptimize = sum(len(filtered_selection_points[c][0]) for c in changed_chromosomes)
+        if not changed_chromosomes:
+            logger.info('All loci retained; keeping the original fit without reoptimization')
+        elif n_to_reoptimize:
+            logger.info(f'Reoptimizing fitness of {n_to_reoptimize} surviving loci after filtering '
+                        f'({final_reoptimization_N_iterations} iterations/locus-neighborhood)')
         fitness_cols = [f'fitness_{ls}_{d}' for ls in LENGTH_SCALE_NAMES for d in ['gain', 'loss']]
         for cur_chrom, chrom_selection_points in filtered_selection_points.items():
-            if len(chrom_selection_points[0]) == 0:
+            if cur_chrom not in changed_chromosomes or len(chrom_selection_points[0]) == 0:
                 continue
             reoptimized_selection_points, _ = final_optimization_step(
                 cur_chrom=cur_chrom,
