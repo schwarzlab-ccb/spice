@@ -143,6 +143,32 @@ new null. This is implemented and unit-tested, not yet empirically calibrated.
 `--mode chromosome_hybrid` is also accepted by `spice permute`, but the config
 must use the corresponding chromosome scoring strategy.
 
+An alternative opt-in mode, `chromosome_exclusion`, removes the shorter-arm
+length threshold:
+
+```yaml
+loci_detection:
+  p_values_permute_mode: chromosome_exclusion
+  p_values_strategy: zpool_chrom
+```
+
+For an event with coordinate span `L = end - start` and centromere interior
+`(Cstart, Cend)`, exclude start positions in `(Cstart, Cend)` or in
+`(Cstart - L, Cend - L)`. Draw uniformly from all remaining integer starts where
+the complete event fits within the observed chromosome bounds. Thus neither
+endpoint can fall inside the centromere, while events of any length can span it
+if their geometry permits. Contact with the centromere boundaries is allowed.
+The stored model width is preserved even when it differs from the coordinate span.
+One usable arm restricts placement to that arm; events with no legal placement
+remain fixed and are logged. Non-internal events remain unchanged.
+
+Like hybrid mode, this mode preprocesses before permutation and requires
+`zpool_chrom` or `perchrom`. Use a fresh output directory and generate a fresh,
+mode-tagged null when enabling it; hybrid, legacy, and exclusion caches cannot be
+mixed. `spice permute --mode chromosome_exclusion` is also supported. The default
+remains `rotate`; implementing this mode does not replace existing nulls. Placement
+and workflow tests use synthetic fixtures; empirical calibration is pending.
+
 Loci preprocessing and each fitting stage use separate random streams. With the same
 inputs, parameters, and seed, rebuilding a stage gives the same result whether preceding
 stages were computed, cached, or loaded during a resumed run. When changing the seed,

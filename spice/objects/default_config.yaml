@@ -81,6 +81,8 @@ loci_detection:
   # Opt-in hybrid: chromosome_hybrid with p_values_strategy: zpool_chrom.
   # Preprocess first, then independently place fixed-width events across either arm;
   # only events longer than the shorter usable arm may bridge the centromere.
+  # Alternative: chromosome_exclusion excludes endpoints inside the centromere at every width.
+  # Like hybrid, requires chromosome scoring and a fresh mode-tagged null/output directory.
   p_values_permute_mode: 'rotate' # 'rotate' uses a shared circular offset per sample/chrom/arm, cutting outside event interiors to preserve widths, overlaps and circular spacing; 'uniform' places events independently
   final_reoptimization_N_iterations: 100000 # Iterations per locus-neighborhood to refit fitness of loci that survive p-value filtering (positions frozen; see final_optimization_step)
   # Event preprocessing parameters

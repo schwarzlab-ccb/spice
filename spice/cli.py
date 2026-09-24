@@ -483,19 +483,20 @@ def _invalidate_permutation_tables(loci_results_dir, index):
 
 
 def _check_permutation_chrom_mode(unit_dir, chrom, mode, write=False):
-    """Keep scattered hybrid fits from being mixed with old arm-null caches."""
+    """Keep scattered fits from being mixed across chromosome/legacy null modes."""
     import json
+    from spice.tsg_og.permutation import CHROMOSOME_MODES
     marker = os.path.join(unit_dir, f'permutation_mode_{chrom}.json')
     if os.path.exists(marker):
         with open(marker) as handle:
             recorded = json.load(handle)
         if recorded != {'mode': mode, 'chrom': chrom}:
             raise ValueError(f'Permutation cache mode mismatch for {chrom}; use a fresh output directory')
-    elif mode == 'chromosome_hybrid':
+    elif mode in CHROMOSOME_MODES:
         old_cache = (os.path.exists(os.path.join(unit_dir, 'detection', chrom)) or
                      os.path.exists(os.path.join(unit_dir, 'data_per_length_scale', f'{chrom}.pickle')))
         if not write or old_cache:
-            raise ValueError(f'Hybrid permutation cache lacks provenance for {chrom}; use a fresh output directory')
+            raise ValueError(f'{mode} permutation cache lacks provenance for {chrom}; use a fresh output directory')
     if write:
         os.makedirs(unit_dir, exist_ok=True)
         with open(marker, 'w') as handle:
@@ -519,8 +520,8 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
     run_loci_detection_per_chrom per chromosome, then combine_loci with the p-value off. That is
     the whole point of the permutation null: its loci are produced by the identical cascade
     (including every event-preprocessing and filtering step), so the fitness statistic is
-    comparable to the observed one. Hybrid mode preprocesses before permutation
-    and passes that fixed event set directly into detection and combination.
+    comparable to the observed one. Chromosome modes preprocess before permutation
+    and pass that fixed event set directly into detection and combination.
     """
     from spice.main_loci_functions import run_loci_detection_per_chrom, combine_loci
     from spice.logging import get_logger
@@ -1292,11 +1293,13 @@ Examples:
     parser_perm.add_argument('--pool', action='store_true',
                              help='Pool the per-unit tables already on disk into the null table '
                                   'and exit, without detecting anything.')
-    parser_perm.add_argument('--mode', choices=('rotate', 'uniform', 'chromosome_hybrid'), default=None,
+    parser_perm.add_argument('--mode', choices=('rotate', 'uniform', 'chromosome_hybrid', 'chromosome_exclusion'), default=None,
                              help="Positional model: 'rotate' shifts each (sample, chrom, arm) "
                                   "circularly, cutting only between events; 'uniform' places each "
                                   "event independently within its arm; chromosome_hybrid permits either arm "
-                                  "and centromere-spanning long events. Default from p_values_permute_mode.")
+                                  "and centromere-spanning long events; chromosome_exclusion excludes either "
+                                  "endpoint inside the centromere at any event length. "
+                                  "Default from p_values_permute_mode.")
     parser_perm.add_argument('--loci-steps', nargs='+', default=None,
                              help='Detection steps for the permuted cohorts; must match the real '
                                   'run or the null is not comparable. Default: the config value.')
