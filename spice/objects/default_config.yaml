@@ -49,7 +49,7 @@ loci_detection:
   N_loci_spacing: null # If set, seed one locus per this many bp of searchable sequence
   skip_up_down: False # Skip up/down assignment
   use_original_rank: False # Use original rank from detection instead of re-ranking
-  N_bootstrap: 10 # Number of bootstrap samples for signal bootstrap
+  N_bootstrap: 100 # Signal CI bootstrap samples; 1000 gives more stable tail estimates at ~10x bootstrap time/storage
   N_kernel: 1000 # Number of kernel samples for convolution kernel and height multiplier
   overwrite_preprocessing: False # Force recalculation of preprocessing caches (bootstrap signals, data_per_length_scale)
   detection_blocked_distance_th: 200000 # Blocked distance threshold (in bp)

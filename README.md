@@ -169,6 +169,22 @@ mixed. `spice permute --mode chromosome_exclusion` is also supported. The defaul
 remains `rotate`; implementing this mode does not replace existing nulls. Placement
 and workflow tests use synthetic fixtures; empirical calibration is pending.
 
+The CLI/config default is `loci_detection.N_bootstrap: 100` for the signal's
+2.5% and 97.5% bootstrap quantiles. This is a runtime/storage compromise; use
+`1000` for more stable tail estimates when resources permit. Signal resampling
+work and stored bootstrap arrays grow approximately linearly with this count,
+so 1000 costs about ten times as much as 100 for that stage, not for the entire
+pipeline. `N_bootstrap_for_widths` remains 10: increasing the signal count does
+not increase the number of width-fitting optimizations. Signal bounds also
+participate in detection/filtering, so changing the count can change fitted peaks
+and downstream runtime, not just the reported CI score.
+
+Apply a changed count to a fresh run/output directory with matching observed and
+null settings. The bootstrap filename contains the count, but the derived
+`data_per_length_scale/<chrom>.pickle` filename does not; resuming old caches
+could retain the old bounds. Existing saved runs and frozen source snapshots
+keep their original settings.
+
 Loci preprocessing and each fitting stage use separate random streams. With the same
 inputs, parameters, and seed, rebuilding a stage gives the same result whether preceding
 stages were computed, cached, or loaded during a resumed run. When changing the seed,
