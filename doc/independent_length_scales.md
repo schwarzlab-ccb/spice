@@ -47,3 +47,19 @@ scales complete their final widths.
 This mode applies to de novo `loci_detection`. Reference-based `loci_assignment`
 continues to require joint mode. Clustering and browser workflow changes are
 separate from this detection option.
+
+## Native seed components
+
+`spice.components.cluster_loci` groups pre-filter tables within chromosome, scale
+and OG/TSG direction. The final-centroid radius is half the median observed model
+event width for that track; total center span is bounded by the median. It ports
+the pipeline's deterministic nearest-per-seed greedy extraction, using no scores
+in membership or tie-breaking. Singletons are retained. `mean_q` averages only
+represented seeds and is descriptive, not a calibrated component FDR. Component
+width is the envelope of member location intervals.
+
+`spice.components.fit_fixed_loci` fits these fixed centers with separate gain/loss
+fitness, independently by scale. It preserves geometry and selection scores,
+allows zero initial fitness to change, and accepts a block only when native loss
+improves. The pipeline orchestrates raw fits followed by filtered-set refits;
+scales retaining every component keep their existing fit.
