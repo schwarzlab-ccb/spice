@@ -550,3 +550,8 @@ Hybrid permutation uses `end-start` for placement geometry and preserves the
 input `width` separately. Imported event tables may contain different values;
 SPICE uses the stored width for length-scale/kernel modeling, so permutation
 must neither overwrite it nor stretch the original coordinate span to match it.
+
+Hybrid permutation combination validates mode markers for every chromosome cache
+that `combine_loci` will load, including chromosomes absent from the current
+processed event frame. Pooling and inline combination share the same cache
+enumeration as `combine_loci`; incompatible leftovers are rejected before use.

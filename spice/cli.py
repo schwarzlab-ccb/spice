@@ -503,6 +503,13 @@ def _check_permutation_chrom_mode(unit_dir, chrom, mode, write=False):
             handle.write('\n')
 
 
+def _check_permutation_combine_modes(unit_dir, mode):
+    """Validate exactly the cache scope used by combine_loci, including eventless chromosomes."""
+    from spice.main_loci_functions import cached_loci_chromosomes
+    for chrom in cached_loci_chromosomes(unit_dir):
+        _check_permutation_chrom_mode(unit_dir, chrom, mode)
+
+
 def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, seed, permute_mode,
                           steps, args, config):
     """Detect loci on ONE positionally-permuted copy of the cohort; return its loci table.
@@ -526,6 +533,8 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
     logger.info(f'  [permutation s{seed}] moved {n_moved:,} internal events'
                 + (f', left {n_fixed:,} internal events fixed' if n_fixed else ''))
     unit_dir = _permutation_unit_dir(loci_results_dir, seed)
+    # Reject leftover incompatible caches before invalidating tables or fitting.
+    _check_permutation_combine_modes(unit_dir, permute_mode)
     for chrom in chroms:
         _check_permutation_chrom_mode(unit_dir, chrom, permute_mode, write=True)
     _invalidate_permutation_tables(loci_results_dir, seed)
@@ -557,6 +566,7 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
             th_locus_prominence=loci_params['th_locus_prominence'],
             th_locus_mean_fitness=loci_params['th_locus_mean_fitness'],
         )
+    _check_permutation_combine_modes(unit_dir, permute_mode)
     loci_df, _, _, _ = combine_loci(loci_results_dir=unit_dir, processed_events=processed,
                                  calculate_p_value=False, mode='detection')
     loci_df['permutation_mode'] = permute_mode
@@ -665,8 +675,7 @@ def main_permute(args):
                     raw_for_pool = load_final_events()
                 processed, _, _ = permutation.prepare_permutation_events(
                     raw_for_pool, seed=derive_seed('permutation', idx), mode=mode, loci_params=loci_params)
-                for chrom in processed.chrom.unique():
-                    _check_permutation_chrom_mode(d, chrom, mode)
+                _check_permutation_combine_modes(d, mode)
                 loci_df, _, _, _ = combine_loci(loci_results_dir=d, processed_events=processed,
                                              calculate_p_value=False, mode='detection')
                 loci_df['permutation_mode'] = mode

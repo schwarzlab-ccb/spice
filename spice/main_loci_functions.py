@@ -607,6 +607,12 @@ def run_loci_detection_per_chrom(
     return RESULTS
 
 
+def cached_loci_chromosomes(loci_results_dir):
+    """Chromosome caches consumed by combination, independent of retained events."""
+    return [chrom for chrom in CHROMS[:-1]
+            if os.path.exists(os.path.join(loci_results_dir, 'data_per_length_scale', f'{chrom}.pickle'))]
+
+
 @CALC_NEW()
 def combine_loci(
     loci_results_dir: str,
@@ -645,12 +651,8 @@ def combine_loci(
     all_loci_widths = {}
     all_data_per_length_scale = {}
 
-    for i, cur_chrom in enumerate(CHROMS[:-1], 1):
-        
-        # Check if data_per_length_scale file exists (indicator that chromosome was processed)
+    for cur_chrom in cached_loci_chromosomes(loci_results_dir):
         data_per_length_scale_file = os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle')
-        if not os.path.exists(data_per_length_scale_file):
-            continue
         logger.info(f"Loading results for {cur_chrom}")
         
         # Load final selection points

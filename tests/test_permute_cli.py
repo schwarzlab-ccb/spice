@@ -230,3 +230,61 @@ def test_mode_mismatch_does_not_invalidate_existing_tables(permutation_run,monke
     with pytest.raises(ValueError,match='mode mismatch'):cli.main_permute(args)
     assert (unit/'unit_loci.tsv').read_text()=='original unit'
     assert (root/permutation.NULL_FILENAME).read_text()=='original null'
+
+
+@pytest.mark.parametrize('execution', ['pool', 'pool_overwrite', 'inline'])
+@pytest.mark.parametrize('marker_mode', [None, 'rotate'])
+def test_hybrid_rejects_cached_chromosome_absent_from_processed_events(
+        permutation_run, monkeypatch, execution, marker_mode):
+    """chr2 is absent from events but combine_loci would still load its cache."""
+    from unittest.mock import Mock
+    args, cfg, root, events = permutation_run
+    assert set(events.chrom) == {'chr1'}
+    cfg['loci_detection'].update(p_values_permute_mode='chromosome_hybrid', p_values_strategy='zpool_chrom')
+    unit = root/'permutations/s1'
+    cli._check_permutation_chrom_mode(str(unit), 'chr1', 'chromosome_hybrid', write=True)
+    if marker_mode:
+        cli._check_permutation_chrom_mode(str(unit), 'chr2', marker_mode, write=True)
+    (unit/'data_per_length_scale').mkdir()
+    (unit/'data_per_length_scale/chr2.pickle').write_bytes(b'legacy cache')
+    (root/permutation.NULL_FILENAME).write_text('original pooled null')
+    if execution != 'pool':
+        (unit/'unit_loci.tsv').write_text('original unit')
+    monkeypatch.setattr(permutation, 'prepare_permutation_events', lambda *a, **kw: (events, 1, 0))
+    combine = Mock()
+    detect = Mock()
+    monkeypatch.setattr(main_loci_functions, 'combine_loci', combine)
+    monkeypatch.setattr(main_loci_functions, 'run_loci_detection_per_chrom', detect)
+    args.pool = execution.startswith('pool')
+    args.overwrite = execution == 'pool_overwrite'
+    with pytest.raises(ValueError, match='chr2.*fresh output'):
+        cli.main_permute(args)
+    combine.assert_not_called()
+    detect.assert_not_called()
+    assert (root/permutation.NULL_FILENAME).read_text() == 'original pooled null'
+    if execution != 'pool':
+        assert (unit/'unit_loci.tsv').read_text() == 'original unit'
+    else:
+        assert not (unit/'unit_loci.tsv').exists()
+
+
+def test_hybrid_pool_accepts_marked_eventless_cache_and_ignores_unconsumed_chromosomes(
+        permutation_run, monkeypatch):
+    from unittest.mock import Mock
+    args, cfg, root, events = permutation_run
+    cfg['loci_detection'].update(p_values_permute_mode='chromosome_hybrid', p_values_strategy='zpool_chrom')
+    unit = root/'permutations/s1'
+    cli._check_permutation_chrom_mode(str(unit), 'chr2', 'chromosome_hybrid', write=True)
+    (unit/'data_per_length_scale').mkdir()
+    for chrom in ['chr2', 'chrY', 'unknown']:
+        (unit/f'data_per_length_scale/{chrom}.pickle').write_bytes(b'fixture cache')
+    assert main_loci_functions.cached_loci_chromosomes(str(unit)) == ['chr2']
+    # No chr1 cache: combination would not consume it, so no marker is required.
+    monkeypatch.setattr(permutation, 'prepare_permutation_events', lambda *a, **kw: (events, 1, 0))
+    combine = Mock(return_value=(locus_frame(), {}, {}, locus_frame()))
+    monkeypatch.setattr(main_loci_functions, 'combine_loci', combine)
+    args.pool = True
+    cli.main_permute(args)
+    combine.assert_called_once()
+    table = pd.read_csv(root/permutation.NULL_FILENAME, sep='\t')
+    assert set(table.permutation_mode) == {'chromosome_hybrid'}
