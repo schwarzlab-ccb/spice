@@ -940,6 +940,7 @@ def main_loci_detection(args):
         overwrite=args.overwrite,
         mode='detection',
         final_reoptimization_N_iterations=loci_params['final_reoptimization_N_iterations'],
+        post_filter_refit_method=loci_params.get('post_filter_refit_method', 'joint'),
     )
 
     # Save final combined loci results

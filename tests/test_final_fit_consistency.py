@@ -65,6 +65,7 @@ def test_refits_only_chromosomes_with_removed_peaks(combined_run, cutoff, floor)
     root, optimizer = combined_run
     final, points, widths, original = main.combine_loci(
         str(root), calculate_p_value=True, p_value_threshold=cutoff,
+        post_filter_refit_method='neighborhood',
         mean_fitness_threshold=floor, permutation_null=pd.DataFrame({'stat': [1.0]}))
     assert [call.kwargs['cur_chrom'] for call in optimizer.call_args_list] == ['chr1']
     before = 1.0 if floor is None else 2.0

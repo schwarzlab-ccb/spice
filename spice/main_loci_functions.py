@@ -625,6 +625,7 @@ def combine_loci(
     overwrite: bool = False,
     mode: str = 'detection',
     final_reoptimization_N_iterations: int = 100_000,
+    post_filter_refit_method: str = "joint",
 ) -> Tuple[pd.DataFrame, Dict, Dict, pd.DataFrame]:
     """
     Combine results from all chromosomes after loci detection or assignment
@@ -650,6 +651,10 @@ def combine_loci(
     all_selection_points = {}
     all_loci_widths = {}
     all_data_per_length_scale = {}
+    from spice.post_filter_refit import iteration_unit, joint_optimization_step
+    refit_unit = iteration_unit(post_filter_refit_method)
+    refit_optimizer = (joint_optimization_step if post_filter_refit_method == "joint"
+                       else final_optimization_step)
 
     for cur_chrom in cached_loci_chromosomes(loci_results_dir):
         data_per_length_scale_file = os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle')
@@ -744,18 +749,18 @@ def combine_loci(
         final_loci_df = final_loci_df[final_loci_df['_keep']].drop(columns='_keep').reset_index(drop=True)
 
         # Dropping non-significant loci leaves the survivors' fitness stale for the reduced model.
-        # Refit them (positions frozen) with the same per-locus-neighborhood optimizer as used before
+        # Refit them at fixed positions with the configured global or neighborhood optimizer.
         n_to_reoptimize = sum(len(filtered_selection_points[c][0]) for c in changed_chromosomes)
         if not changed_chromosomes:
             logger.info('All loci retained; keeping the original fit without reoptimization')
         elif n_to_reoptimize:
             logger.info(f'Reoptimizing fitness of {n_to_reoptimize} surviving loci after filtering '
-                        f'({final_reoptimization_N_iterations} iterations/locus-neighborhood)')
+                        f'({post_filter_refit_method}: {final_reoptimization_N_iterations} iterations {refit_unit})')
         fitness_cols = [f'fitness_{ls}_{d}' for ls in LENGTH_SCALE_NAMES for d in ['gain', 'loss']]
         for cur_chrom, chrom_selection_points in filtered_selection_points.items():
             if cur_chrom not in changed_chromosomes or len(chrom_selection_points[0]) == 0:
                 continue
-            reoptimized_selection_points, _ = final_optimization_step(
+            reoptimized_selection_points, _ = refit_optimizer(
                 cur_chrom=cur_chrom,
                 final_selection_points=chrom_selection_points,
                 data_per_length_scale=all_data_per_length_scale[cur_chrom],
