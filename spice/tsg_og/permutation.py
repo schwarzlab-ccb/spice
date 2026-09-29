@@ -2,7 +2,8 @@
 
 Permute event positions in the real cohort, run the same
 detection on the result, and pool the loci it finds. Null loci are then produced by the same cascade
-as the observed ones, including every event-preprocessing and filtering step.
+as the observed ones. Legacy modes filter after randomization; chromosome modes
+select the observed preprocessed event set first, then randomize its positions.
 
 See docs/PERMUTATION_NULL.MD in the pipeline repo for the derivation and the measured calibration.
 """
@@ -21,6 +22,8 @@ NULL_FILENAME = 'permutation_null.tsv'
 UNIT_TEMPLATE = 'permutation_unit_s{seed}_{chrom}.tsv'
 DEFAULT_K = 16
 STRATEGIES = ('zpool', 'zpool_chrom', 'pooled', 'perchrom')
+CHROMOSOME_MODES = ('chromosome_hybrid', 'chromosome_exclusion')
+PERMUTE_MODES = ('rotate', 'uniform') + CHROMOSOME_MODES
 #: If either arm has fewer draws than this, both arms use their chromosome/direction
 #: stratum. This avoids estimating calibration moments from a sparse or absent arm.
 MIN_STRATUM_DRAWS = 20
@@ -103,8 +106,157 @@ def _rotation_offset(starts, ends, lo, hi, rng):
         draw -= right - left
 
 
+def _hybrid_start_ranges(width, bounds):
+    """Disjoint inclusive integer start ranges; gap boundaries themselves are allowed.
+
+    Short events fit wholly in either usable arm. Events longer than the shorter
+    arm may also bridge the gap, with both endpoints in usable arms. A missing
+    arm never enables bridging. Widths stay in physical bp, including any gap.
+    """
+    if not np.isfinite([width, *bounds]).all() or width <= 0 or width != int(width):
+        raise ValueError('Hybrid placement requires finite bounds and positive integer event widths')
+    p_lo, p_hi, q_lo, q_hi = bounds
+    arms = [(lo, hi) for lo, hi in [(p_lo, p_hi), (q_lo, q_hi)] if hi > lo]
+    if len(arms) == 2 and p_hi > q_lo:
+        raise ValueError('Hybrid chromosome arms must not overlap')
+    ranges = [(int(np.ceil(lo)), int(np.floor(hi-width))) for lo, hi in arms]
+    if len(arms) == 2 and width > min(p_hi-p_lo, q_hi-q_lo):
+        # Start in p, end in q: the intersection of their endpoint constraints.
+        ranges.append((int(np.ceil(max(p_lo, q_lo-width))),
+                       int(np.floor(min(p_hi, q_hi-width)))))
+    merged = []
+    for lo, hi in sorted((lo, hi) for lo, hi in ranges if lo <= hi):
+        if merged and lo <= merged[-1][1]+1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+    return merged
+
+
+def _exclusion_start_ranges(width, bounds):
+    """Legal integer starts after excluding either endpoint inside the centromere.
+
+    For gap (Cstart, Cend), forbidden starts are its interior and the shifted
+    interior (Cstart-width, Cend-width). Boundary contact and spanning are legal
+    at every width. Sample only where the complete event fits in the observed
+    chromosome; a missing arm restricts placement to the remaining usable arm.
+    """
+    if not np.isfinite([width, *bounds]).all() or width <= 0 or width != int(width):
+        raise ValueError('Exclusion placement requires finite bounds and positive integer event widths')
+    p_lo, p_hi, q_lo, q_hi = bounds
+    arms = [(lo, hi) for lo, hi in [(p_lo, p_hi), (q_lo, q_hi)] if hi > lo]
+    if len(arms) == 2 and p_hi > q_lo:
+        raise ValueError('Exclusion chromosome arms must not overlap')
+    if not arms:
+        return []
+    lo, hi = int(np.ceil(arms[0][0])), int(np.floor(arms[-1][1]-width))
+    ranges = [(lo, hi)] if lo <= hi else []
+    if len(arms) == 2:
+        for left, right in [(p_hi, q_lo), (p_hi-width, q_lo-width)]:
+            # Convert open physical intervals into inclusive integer exclusions.
+            first, last = int(np.floor(left))+1, int(np.ceil(right))-1
+            if first > last:
+                continue
+            remaining = []
+            for lo, hi in ranges:
+                if last < lo or first > hi:
+                    remaining.append((lo, hi))
+                else:
+                    if lo < first:
+                        remaining.append((lo, first-1))
+                    if last < hi:
+                        remaining.append((last+1, hi))
+            ranges = remaining
+    return ranges
+
+
+def _draw_start(ranges, rng):
+    """Uniform over legal integer coordinates, not uniform over arms or ranges."""
+    total = sum(hi-lo+1 for lo, hi in ranges)
+    if not total:
+        return None
+    draw = int(rng.integers(total))
+    for lo, hi in ranges:
+        count = hi-lo+1
+        if draw < count:
+            return lo+draw
+        draw -= count
+
+
+def _permute_chromosome(events_df, seed, bounds, mode):
+    start_ranges = (_hybrid_start_ranges if mode == 'chromosome_hybrid'
+                    else _exclusion_start_ranges)
+    ev = events_df.copy()
+    internal = ev['pos'].eq('internal').to_numpy()
+    rng = np.random.default_rng(seed)
+    starts = ev['start'].to_numpy(copy=True)
+    ends = ev['end'].to_numpy(copy=True)
+    for i in np.flatnonzero(internal):
+        row = ev.iloc[i]
+        if row.chrom not in bounds:
+            raise ValueError(f'Missing {mode} arm bounds for {row.chrom}')
+        # Imported event tables can carry a model width different from their
+        # coordinate span. Preserve both: geometry controls placement, while
+        # the original width continues to determine SPICE's scale/kernel inputs.
+        span = row.end-row.start
+        start = _draw_start(start_ranges(span, bounds[row.chrom]), rng)
+        # No valid placement: retain the event and include it in the fixed count.
+        if start is not None:
+            starts[i], ends[i] = start, start+span
+    ev['start'], ev['end'] = starts, ends
+    moved = int((internal & (starts != events_df['start'].to_numpy())).sum())
+    return ev, moved, int(internal.sum())-moved
+
+
+def prepare_permutation_events(raw_events, seed, mode, loci_params):
+    """Return the exact event frame to pass directly to null detection/combination.
+
+    Each chromosome null conditions on the observed preprocessed event set. Filtering
+    randomized coordinates again would selectively remove the new bridge events,
+    alter sample burdens and potentially drop whole IDs. Legacy order is unchanged.
+    """
+    from spice.main_loci_functions import process_final_events_for_loci_routines
+    options = {key: loci_params.get(key, True) for key in
+               ['remove_plateaus', 'remove_chrY', 'drop_duplicates', 'use_observed_centromeres']}
+    if mode in CHROMOSOME_MODES:
+        prepared = process_final_events_for_loci_routines(final_events_df=raw_events, **options)
+        return permute_events(prepared, seed=seed, mode=mode)
+    permuted, moved, fixed = permute_events(raw_events, seed=seed, mode=mode)
+    return process_final_events_for_loci_routines(final_events_df=permuted, **options), moved, fixed
+
+
+def validate_null_mode(frame, mode):
+    """Chromosome tables must carry their mode through scatter, pooling and scoring."""
+    if 'permutation_mode' not in frame:
+        if mode in CHROMOSOME_MODES:
+            raise ValueError(f'{mode} null requires matching provenance; generate a fresh null')
+        return
+    modes = set(frame.permutation_mode.dropna())
+    if frame.permutation_mode.isna().any() or (len(frame) and modes != {mode}):
+        raise ValueError(f'Permutation null mode mismatch: expected {mode}, got {modes}')
+
+
+def validate_permutation_strategy(mode, strategy):
+    if mode not in PERMUTE_MODES:
+        raise ValueError(f'Unknown permutation mode: {mode}')
+    if mode in CHROMOSOME_MODES and strategy not in ('zpool_chrom', 'perchrom'):
+        raise ValueError(f'{mode} requires chromosome calibration: zpool_chrom or perchrom')
+
+
 def permute_events(events_df, seed, mode='rotate', bounds=None):
-    """Permute internal-event POSITIONS within each chromosome arm. Returns (df, n_moved, n_fixed).
+    """Permute internal events; return (df, n_moved, n_fixed).
+
+    `chromosome_hybrid` places events independently across the chromosome using
+    _hybrid_start_ranges with the coordinate span (end-start). It preserves both
+    that span and the stored model width, plus sample/direction/chromosome
+    identities, but not spacing or overlaps. Use prepare_permutation_events for
+    raw inputs so the observed event set is selected before this randomization.
+
+    `chromosome_exclusion` uses the same independent sampling but excludes only
+    starts placing either endpoint inside the centromere. Any event can span the
+    gap, irrespective of the shorter arm's length; physical boundaries may touch.
+
+    The legacy rotate/uniform modes operate within each original arm:
 
     Only rows with pos == "internal" move: `detection.get_cur_widths` filters on exactly that, so
     they are the only events detection consumes, and every other row passes through untouched so the
@@ -122,10 +274,12 @@ def permute_events(events_df, seed, mode='rotate', bounds=None):
     cuts; a group containing an arm-spanning event can only retain its original position.
     Counts report actual moved and fixed internal rows, including sampled identity moves.
     """
-    if mode not in ('rotate', 'uniform'):
-        raise ValueError(f"mode must be 'rotate' or 'uniform', got {mode!r}")
+    if mode not in PERMUTE_MODES:
+        raise ValueError(f'Unknown permutation mode: {mode}')
     if bounds is None:
         bounds = arm_bounds()
+    if mode in CHROMOSOME_MODES:
+        return _permute_chromosome(events_df, seed, bounds, mode)
     rng = np.random.default_rng(seed)
     ev = events_df.copy()
     internal = ev['pos'].eq('internal').to_numpy()
@@ -184,10 +338,18 @@ def null_from_loci(loci_frames):
     permutation rotated within. `pos` is kept so the arm call can be audited or redone.
     """
     parts = []
+    modes = set()
+    untagged = False
     bounds = arm_bounds()
     for df in loci_frames:
         if not len(df):
             continue
+        if 'permutation_mode' in df:
+            if df.permutation_mode.isna().any():
+                raise ValueError('Missing permutation mode in tagged null unit')
+            modes.update(df.permutation_mode.unique())
+        else:
+            untagged = True
         per_ls = fitness_per_ls(df)
         parts.append(pd.DataFrame({
             'chrom': df['chrom'].to_numpy(), 'direction': _direction(df),
@@ -197,7 +359,12 @@ def null_from_loci(loci_frames):
             **{f'stat_{ls}': per_ls[:, j] for j, ls in enumerate(LENGTH_SCALE_NAMES)}}))
     if not parts:
         raise ValueError('no null loci: every permutation produced an empty loci table')
-    return pd.concat(parts, ignore_index=True)
+    if len(modes) > 1 or (modes and untagged):
+        raise ValueError('Cannot pool mixed or partly untagged permutation modes')
+    result = pd.concat(parts, ignore_index=True)
+    if modes:
+        result['permutation_mode'] = next(iter(modes))
+    return result
 
 
 def _empirical_p(obs, ref):
@@ -249,6 +416,11 @@ def permutation_p(loci_df, null_df, strategy='zpool', column='stat'):
     """
     if strategy not in STRATEGIES:
         raise ValueError(f'strategy must be one of {STRATEGIES}, got {strategy!r}')
+    if 'permutation_mode' in null_df:
+        for mode in CHROMOSOME_MODES:
+            if (null_df.permutation_mode == mode).any():
+                validate_null_mode(null_df, mode)
+                validate_permutation_strategy(mode, strategy)
     if not len(loci_df):
         return np.zeros(0)
     obs_stat = (fitness_statistic(loci_df) if column == 'stat'

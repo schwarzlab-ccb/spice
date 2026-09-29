@@ -49,7 +49,7 @@ loci_detection:
   N_loci_spacing: null # If set, seed one locus per this many bp of searchable sequence
   skip_up_down: False # Skip up/down assignment
   use_original_rank: False # Use original rank from detection instead of re-ranking
-  N_bootstrap: 10 # Number of bootstrap samples for signal bootstrap
+  N_bootstrap: 100 # Signal CI bootstrap samples; 1000 gives more stable tail estimates at ~10x bootstrap time/storage
   N_kernel: 1000 # Number of kernel samples for convolution kernel and height multiplier
   overwrite_preprocessing: False # Force recalculation of preprocessing caches (bootstrap signals, data_per_length_scale)
   detection_blocked_distance_th: 200000 # Blocked distance threshold (in bp)
@@ -78,6 +78,11 @@ loci_detection:
   p_value_threshold: 0.05 # Loci with q_value (BH-FDR fitness p) >= this are dropped from the output
   p_values_K: 16 # Permutations. The empirical p floors at 1/(pooled+1) and that floor binds the FDR (BH gives a tied block q = n*p/k), so do NOT lower this to save time
   p_values_strategy: 'zpool' # Standardize within chromosome/direction/arm; pool both arms if either has fewer than 20 null loci. Include the scored locus in its own calibration. Alternatives: zpool_chrom, pooled, perchrom.
+  # Opt-in hybrid: chromosome_hybrid with p_values_strategy: zpool_chrom.
+  # Preprocess first, then independently place fixed-width events across either arm;
+  # only events longer than the shorter usable arm may bridge the centromere.
+  # Alternative: chromosome_exclusion excludes endpoints inside the centromere at every width.
+  # Like hybrid, requires chromosome scoring and a fresh mode-tagged null/output directory.
   p_values_permute_mode: 'rotate' # 'rotate' uses a shared circular offset per sample/chrom/arm, cutting outside event interiors to preserve widths, overlaps and circular spacing; 'uniform' places events independently
   final_reoptimization_N_iterations: 100000 # Iterations per locus-neighborhood to refit fitness of loci that survive p-value filtering (positions frozen; see final_optimization_step)
   # Event preprocessing parameters
