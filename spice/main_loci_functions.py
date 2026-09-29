@@ -729,9 +729,11 @@ def combine_loci(
         final_loci_df = final_loci_df.assign(_keep=keep_all)
         filtered_selection_points = dict()
         filtered_loci_widths = dict()
+        chrom_needs_reoptimization = dict()
         for cur_chrom in list(all_selection_points.keys()):
             keep = (final_loci_df.query('chrom == @cur_chrom')
                                  .sort_values('rank_on_chrom')['_keep'].to_numpy())
+            chrom_needs_reoptimization[cur_chrom] = not keep.all()
             filtered_selection_points[cur_chrom] = [
                 [x for i, x in enumerate(track) if keep[i]] for track in all_selection_points[cur_chrom]]
             filtered_loci_widths[cur_chrom] = [
@@ -739,13 +741,15 @@ def combine_loci(
         final_loci_df = final_loci_df[final_loci_df['_keep']].drop(columns='_keep').reset_index(drop=True)
 
         # Dropping non-significant loci leaves the survivors' fitness stale for the reduced model.
-        # Refit them (positions frozen) with the same per-locus-neighborhood optimizer as used before
-        n_to_reoptimize = sum(len(v[0]) for v in filtered_selection_points.values())
+        # Refit them (positions frozen) with the same per-locus-neighborhood optimizer as used before.
+        # Chromosomes where nothing was filtered out keep their already-optimal fitness as-is.
+        n_to_reoptimize = sum(len(filtered_selection_points[c][0]) for c in filtered_selection_points
+                               if chrom_needs_reoptimization[c])
         logger.info(f'Reoptimizing fitness of {n_to_reoptimize} surviving loci after p-value '
                     f'filtering ({final_reoptimization_N_iterations} iterations/locus-neighborhood)')
         fitness_cols = [f'fitness_{ls}_{d}' for ls in LENGTH_SCALE_NAMES for d in ['gain', 'loss']]
         for cur_chrom, chrom_selection_points in filtered_selection_points.items():
-            if len(chrom_selection_points[0]) == 0:
+            if len(chrom_selection_points[0]) == 0 or not chrom_needs_reoptimization[cur_chrom]:
                 continue
             reoptimized_selection_points, _ = final_optimization_step(
                 cur_chrom=cur_chrom,
