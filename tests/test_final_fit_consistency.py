@@ -137,3 +137,31 @@ def test_empty_combined_fit_does_not_fall_back_to_removed_peaks(tmp_path):
     assert combined and points == [[] for _ in FITNESS]
     with pytest.raises(ValueError, match='recombine'):
         cli._load_plot_selection_points(str(tmp_path), 'detection', 'chr2')
+
+
+def test_combine_cli_reports_only_chromosomes_present_in_fit(tmp_path, monkeypatch):
+    """A subset/autosome-only cohort must complete its within-CI export without chrX."""
+    from spice import data_loaders
+    from spice.tsg_og import detection
+    cfg = deepcopy(spice.config)
+    cfg['name'] = 'subset'
+    cfg['directories'].update(results_dir=str(tmp_path / 'results'), log_dir=str(tmp_path / 'logs'))
+    cfg['loci_detection']['calculate_p_value'] = False
+    monkeypatch.setattr(spice, 'config', cfg)
+    monkeypatch.setattr(spice, 'load_config', lambda _: None)
+    monkeypatch.setattr(cli, '_apply_seed', lambda *args: None)
+    events = pd.DataFrame({'chrom': ['chr1'], 'sample': ['sample1']})
+    monkeypatch.setattr(data_loaders, 'load_final_events', lambda: events)
+    monkeypatch.setattr(main, 'process_final_events_for_loci_routines', lambda **kw: events)
+    frame = pd.DataFrame({'chrom': ['chr1'], 'pos': [100]})
+    points = {'chr1': [[(SimpleNamespace(fitness=1.),)] for _ in FITNESS]}
+    monkeypatch.setattr(main, 'combine_loci', lambda **kw: (frame, points, {'chr1': [(90, 110)]}, frame))
+    root = tmp_path / 'results/subset/loci_of_selection'
+    save_pickle({}, str(root / 'data_per_length_scale/chr1.pickle'))
+    monkeypatch.setattr(detection, 'convolution_simulation_per_ls', lambda *args: [])
+    monkeypatch.setattr(detection, 'calc_within_ci_bootstrap', lambda *args, **kw: [.8])
+    cli.main_loci_detection(Namespace(config_path='fixture', debug=False, log='terminal',
+        seed=42, chrom=None, loci_steps='combine', overwrite=False))
+    result = pd.read_csv(root.parent / 'within_ci_detection.tsv', sep='\t', index_col=0)
+    assert list(result.index) == ['chr1']
+    assert result.loc['chr1', 'within_ci'] == pytest.approx(.8)

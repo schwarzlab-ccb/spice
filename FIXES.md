@@ -16,6 +16,8 @@ Selected changes:
   reject independent-scale and bridge-conditioned artifacts and unsupported
   settings without carrying their experimental algorithms.
 - Self-contained joint optimizer and cache-determinism regression fixtures.
+- The within-CI export uses only chromosomes in the combined fit (selected from
+  `6973995`), avoiding attempts to read chrX in autosome-only synthetic cohorts.
 
 Independent detection, seed components, component maxT/spans, any-scale p-values,
 unconditional final refits, and bridge-preserving permutations/background are not

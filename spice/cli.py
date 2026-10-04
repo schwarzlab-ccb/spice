@@ -965,7 +965,8 @@ def main_loci_detection(args):
     # Genome-wide diagnostic: how much of the signal the (filtered, reoptimized) loci explain
     from spice.tsg_og.detection import calc_genome_wide_within_ci
     genome_wide_within_ci, within_ci_df = calc_genome_wide_within_ci(
-        loci_results_dir, mode='detection', all_selection_points=filtered_selection_points)
+        loci_results_dir, chroms=list(filtered_selection_points), mode='detection',
+        all_selection_points=filtered_selection_points)
     logger.info(f'Genome-wide fraction of signal within the bootstrap CI (filtered, reoptimized loci): {genome_wide_within_ci:.4f}')
     within_ci_output_path = os.path.join(config['directories']['results_dir'], config['name'], 'within_ci_detection.tsv')
     within_ci_df.to_csv(within_ci_output_path, sep='\t', index=True)
