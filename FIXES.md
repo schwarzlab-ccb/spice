@@ -25,16 +25,17 @@ included. Their implementation and feature inventory remain on `anyscale-pvalue`
 `git show anyscale-pvalue:BRANCH_NOTES.md` (notes commit `1736a3c`).
 
 Native defaults remain main's unless listed above. The pipeline explicitly sets
-mean fitness, zpool_chrom, rotate, seed42/null0, K16, bootstrap1000 for both signal
+mean fitness, zpool_chrom, rotate, seed42/null0, K16, bootstrap100 for both signal
 and width, full pruning, 1 Mb candidate spacing, no absolute internal fitness floor,
 and 100,000 joint refit iterations. A keep-all synthetic run retains its original
 fitness after scoring; final refitting no longer runs merely because scoring ran.
 
-The 1000-sample production override was requested after the canonical 100-sample
-rerun. Native YAML defaults remain main's signal100/width10. Width inference uses
-the signal-bootstrap pool and shares one count between intermediate/final passes.
-The existing 100-sample results/nulls are preserved; they do not represent the new
-setting, and fresh null generation is required for a matching 1000-sample run.
+The pipeline separately computes 1,000 final-report positional bootstrap samples
+around the saved post-filter fit. Its top-level reporting setting does not enter
+native detection or null generation. Existing calibrated 100-sample nulls remain
+valid. Native YAML defaults remain main's signal100/width10; the pipeline keeps its
+explicit detection100/width100 override. This supersedes the earlier shared1000
+configuration change, which the user clarified should affect only final reporting.
 
 Validation on 2026-10-04: 160 native tests pass, including real joint optimization,
 permutation/scoring, cold/partial/warm caches, compatibility and edge prominence.
