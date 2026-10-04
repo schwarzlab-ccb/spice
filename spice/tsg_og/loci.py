@@ -295,9 +295,9 @@ def process_locus_prominence(
     cur_type : str
         Current type (e.g., 'gain' or 'loss').
     cur_kernel_size : int
-        Kernel size for limiting the locus width.
+        Kernel width in bins for limiting the locus interval and accepted peak width.
     size_neighborhood : int
-        Size of the neighborhood for smoothing.
+        Half the minimum position-interval width, and padding from neighboring loci, in bins.
     segment_size_dict : dict
         Dictionary mapping length scales to segment sizes.
 
@@ -321,7 +321,7 @@ def process_locus_prominence(
         # Limit start / end by the kernel size
         cur_start = int(max(cur_start, cur_pos_raw - cur_kernel_size / 2))
         cur_end = int(min(cur_end, cur_pos_raw + cur_kernel_size / 2))
-        # If the range is too small, set to 2*size_neighborhood
+        # Restore the fixed local search for narrow position intervals.
         if (cur_end - cur_start) < 2 * size_neighborhood:
             cur_start = cur_pos_raw - size_neighborhood
             cur_end = cur_pos_raw + size_neighborhood
@@ -346,8 +346,12 @@ def process_locus_prominence(
             cur_start = 0
             cur_end = 1
 
+        # Clip the bounds before adding the argmax offset. A negative start would
+        # otherwise shift the selected position left of the actual signal maximum.
+        cur_start = max(0, cur_start)
+        cur_end = min(cur_end, len(data_for_prominence))
         assert cur_start < cur_end, f'Start ({cur_start}) must be less than end ({cur_end}) for locus {ind}'
-        cur_pos = cur_start + np.argmax(data_for_prominence[max(0, cur_start):min(cur_end, len(data_for_prominence) - 1)])
+        cur_pos = cur_start + np.argmax(data_for_prominence[cur_start:cur_end])
         cur_pos = max(0, min(cur_pos, len(data_for_prominence) - 1))
 
         cur_prominence = peak_prominences(data_for_prominence, np.array([cur_pos]))[0]
