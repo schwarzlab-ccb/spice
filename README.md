@@ -550,9 +550,7 @@ remain the scores calculated before this optional refit.
 `loci_detection.post_filter_refit_method` selects `joint` (default) or
 `neighborhood`. Both keep positions fixed and preserve zero-fitness constraints.
 `final_reoptimization_N_iterations` is a total budget per changed chromosome
-model for `joint`, or per neighborhood for `neighborhood`. With independent
-length scales, each changed chromosome/scale is a separate model; gain/loss
-remain paired. This selector is independent of `detection_scale_mode`.
+model for `joint`, or per neighborhood for `neighborhood`.
 Joint refitting keeps the starting fit if the returned fit does not improve its
 native loss. The native annealer still returns its last accepted state; this
 option does not add best-ever tracking or alter detection/null generation.

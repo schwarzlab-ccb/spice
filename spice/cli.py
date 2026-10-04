@@ -643,6 +643,8 @@ def main_permute(args):
     _apply_seed(args, logger)
 
     loci_params = config['loci_detection']
+    from spice.production_compatibility import validate_config
+    validate_config(loci_params)
     loci_results_dir = os.path.join(config['directories']['results_dir'], config['name'],
                                     'loci_of_selection')
     os.makedirs(loci_results_dir, exist_ok=True)
@@ -792,6 +794,8 @@ def main_loci_detection(args):
     
     # Get loci detection parameters from config
     loci_params = config['loci_detection']
+    from spice.production_compatibility import validate_config
+    validate_config(loci_params)
     final_events_df = load_final_events()
 
     logger.info('Processing final events for loci detection')
@@ -1018,6 +1022,8 @@ def main_loci_assignment(args):
     
     # Get loci assignment parameters from config
     loci_params = config['loci_detection']
+    from spice.production_compatibility import validate_config
+    validate_config(loci_params)
     final_events_df = load_final_events()
 
     logger.info('Processing final events for loci detection')

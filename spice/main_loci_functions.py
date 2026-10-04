@@ -190,6 +190,8 @@ def run_loci_detection_per_chrom(
     name = name if name is not None else config['name']
     
     output_dir = os.path.join(loci_results_dir, 'detection', cur_chrom)
+    from spice.production_compatibility import validate_cache, validate_data
+    validate_cache(loci_results_dir, cur_chrom)
        
     if N_loci_spacing:
         # One locus per N_loci_spacing bp of searchable sequence, derived from the same blocked
@@ -223,6 +225,8 @@ def run_loci_detection_per_chrom(
         final_events_df, cur_chrom, N_bootstrap=N_bootstrap, N_kernel=N_kernel, loci_results_dir=loci_results_dir,
         calc_new_force_new=overwrite_preprocessing,
         calc_new_filename=os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle'))
+
+    validate_data(data_per_length_scale)
 
     # Initialize results dictionary
     RESULTS = {w: None for w in which_options}
@@ -656,7 +660,9 @@ def combine_loci(
     refit_optimizer = (joint_optimization_step if post_filter_refit_method == "joint"
                        else final_optimization_step)
 
+    from spice.production_compatibility import validate_cache, validate_data
     for cur_chrom in cached_loci_chromosomes(loci_results_dir):
+        validate_cache(loci_results_dir, cur_chrom)
         data_per_length_scale_file = os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle')
         logger.info(f"Loading results for {cur_chrom}")
         
@@ -685,6 +691,7 @@ def combine_loci(
         )
 
         all_data_per_length_scale[cur_chrom] = open_pickle(data_per_length_scale_file)
+        validate_data(all_data_per_length_scale[cur_chrom])
         
         log_debug(logger, f"  ✓ {cur_chrom}: {len(peak_widths)} loci")
     

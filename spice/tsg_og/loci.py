@@ -510,6 +510,9 @@ def assign_p_values(loci_df, null_df, strategy='zpool'):
     log_debug(logger, f'Assigning fitness p-values to {len(loci_df)} loci from a permutation null '
                       f'of {len(null_df)} loci (strategy={strategy})')
 
+    from spice.production_compatibility import validate_table
+    validate_table(loci_df)
+    validate_table(null_df)
     loci_df = loci_df.copy()
     loci_df['p_value_raw'] = permutation_p(loci_df, null_df, strategy, column='stat')
     for ls in LENGTH_SCALE_NAMES:

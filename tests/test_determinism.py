@@ -157,13 +157,15 @@ class TestParallelPattern:
 
 def test_detection_matches_with_cold_partial_and_warm_preprocessing_cache(tmp_path, repo_root_dir):
     """Exercise real bootstrap/kernel sampling and fitting, including stage resumption."""
-    from pathlib import Path
     import pandas as pd
-    from spice.main_loci_functions import (process_final_events_for_loci_routines,
-                                          run_loci_detection_per_chrom)
-    raw = pd.read_csv(Path(repo_root_dir) / 'data/pcawg_final_events_chr1_chr2.tsv',
-                      sep='\t', dtype={'diff': str}).query('chrom == "chr1"')
-    events = process_final_events_for_loci_routines(final_events_df=raw, remove_plateaus=False)
+    from spice.main_loci_functions import run_loci_detection_per_chrom
+    # A small processed cohort makes this test self-contained; no external PCAWG files.
+    events = pd.DataFrame([
+        dict(chrom='chr1', sample=f'sample{i}', pos='internal', type=direction,
+             start=20_000_000 + i*3_000_000, end=20_000_000 + i*3_000_000 + width,
+             width=width, plateau='neither_left_nor_right')
+        for width in (500_000, 2_000_000, 5_000_000, 20_000_000)
+        for direction in ('gain', 'loss') for i in range(6)])
     options = dict(final_events_df=events, cur_chrom='chr1', name='cache_test', N_loci=2,
                    loci_results_dir=str(tmp_path), N_bootstrap=2, N_kernel=100,
                    overwrite=True, overwrite_preprocessing=False,

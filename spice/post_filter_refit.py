@@ -18,7 +18,7 @@ def joint_optimization_step(cur_chrom, final_selection_points, data_per_length_s
     A model is one chromosome.
     Positions are always fixed. Accept the returned state only if its recomputed
     native loss improves on the starting model, as in each neighborhood fit.
-    The unused neighborhood/position arguments allow the existing scale adapter
+    The unused neighborhood/position arguments allow the existing combine routine
     to call either optimizer without altering its skip/order/seed behavior.
     """
     from spice.tsg_og.detection import _optimize_selection_points, calc_mse_loss
