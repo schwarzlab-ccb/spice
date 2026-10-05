@@ -1,8 +1,16 @@
 # Production fixes
 
 This branch starts at upstream main `ef416ce`. The pipeline production selection
-is `rotate` + directional mean fitness + `zpool_chrom`, with genome-wide BH.
-Main already implements all three; the scoring formula is unchanged here.
+is `rotate` + combined fitness (A+B) + `zpool_chrom`, with genome-wide BH.
+`combined_fitness` adds the mean magnitude of negative opposite-direction fitness
+to the mean positive same-direction fitness. Both means use all four scales,
+with equal weights; paired values from the same null locus remain together.
+Observed and null scoring use this identical statistic. Null tables record their
+scoring method and preserve signed fitness; combined scoring rejects untagged
+legacy or mismatched pooled nulls. Re-pool saved signed null loci to change scores.
+Native API defaults retain `mean_fitness` for compatibility; the pipeline config
+explicitly selects `combined_fitness`. Detection, pruning, scale assignment and
+the reported mean directional fitness retain their original definitions.
 
 Selected changes:
 
@@ -25,7 +33,7 @@ included. Their implementation and feature inventory remain on `anyscale-pvalue`
 `git show anyscale-pvalue:BRANCH_NOTES.md` (notes commit `1736a3c`).
 
 Native defaults remain main's unless listed above. The pipeline explicitly sets
-mean fitness, zpool_chrom, rotate, seed42/null0, K16, bootstrap100 for both signal
+combined fitness, zpool_chrom, rotate, seed42/null0, K16, bootstrap100 for both signal
 and width, full pruning, 1 Mb candidate spacing, no absolute internal fitness floor,
 and 100,000 joint refit iterations. A keep-all synthetic run retains its original
 fitness after scoring; final refitting no longer runs merely because scoring ran.

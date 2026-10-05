@@ -611,7 +611,7 @@ def _build_permutation_null(raw_events, config, loci_params, loci_results_dir, c
         logger.info(f'Permutation {seed}/{K}')
         frames.append(_run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms,
                                             seed, permute_mode, steps, args, config))
-    return permutation.null_from_loci(frames)
+    return permutation.null_from_loci(frames, method=loci_params.get('p_values_method', 'mean_fitness'))
 
 
 def main_permute(args):
@@ -688,7 +688,7 @@ def main_permute(args):
             # Untagged historical units remain usable with legacy modes only.
             unit_frame['permutation_mode'] = mode
             frames.append(unit_frame)
-        null_df = permutation.null_from_loci(frames)
+        null_df = permutation.null_from_loci(frames, method=loci_params.get('p_values_method', 'mean_fitness'))
         null_df.to_csv(null_path, sep='\t', index=False)
         logger.info(f'Pooled {len(frames)} permutation units -> {len(null_df):,} null loci '
                     f'at {null_path}')
@@ -726,7 +726,7 @@ def main_permute(args):
     if args.index is not None:
         logger.info(f'Permutation s{args.index} complete; pool with `spice permute --pool`.')
         return
-    null_df = permutation.null_from_loci(frames)
+    null_df = permutation.null_from_loci(frames, method=loci_params.get('p_values_method', 'mean_fitness'))
     null_df.to_csv(null_path, sep='\t', index=False)
     logger.info(f'Built the permutation null from {K} permutations: {len(null_df):,} loci '
                 f'-> {null_path}')
@@ -941,6 +941,7 @@ def main_loci_detection(args):
         mean_fitness_threshold=mean_fit_thresh,
         permutation_null=null_df,
         p_values_strategy=p_values_strategy,
+        p_values_method=loci_params.get('p_values_method', 'mean_fitness'),
         overwrite=args.overwrite,
         mode='detection',
         final_reoptimization_N_iterations=loci_params['final_reoptimization_N_iterations'],

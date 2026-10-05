@@ -8,12 +8,13 @@ from pathlib import Path
 
 
 def validate_config(params):
-    for key, supported in [('detection_scale_mode', 'joint'),
-                           ('p_values_method', 'mean_fitness')]:
+    for key, supported in [('detection_scale_mode', 'joint')]:
         if params.get(key, supported) != supported:
             raise ValueError(f'{key} requires {supported} on fixes; experimental features '
                              'remain on anyscale-pvalue')
-    from spice.tsg_og.permutation import validate_permutation_strategy
+    from spice.tsg_og.permutation import SCORING_METHODS, validate_permutation_strategy
+    if params.get('p_values_method', 'mean_fitness') not in SCORING_METHODS:
+        raise ValueError('Unsupported p_values_method on fixes')
     validate_permutation_strategy(params.get('p_values_permute_mode', 'rotate'),
                                   params.get('p_values_strategy', 'zpool'))
 

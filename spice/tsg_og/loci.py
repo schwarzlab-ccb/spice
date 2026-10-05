@@ -485,10 +485,12 @@ def calc_overlap_pairs(loci_1, loci_2):
     return np.array(cur_pairs)
 
 
-def assign_p_values(loci_df, null_df, strategy='zpool'):
+def assign_p_values(loci_df, null_df, strategy='zpool', method='mean_fitness'):
     """Assign the FITNESS p-value to loci from the POSITIONAL-PERMUTATION null.
 
-    The tested statistic is the mean optimized fitness over the four same-direction length scales.
+    mean_fitness tests the mean over four same-direction length scales.
+    combined_fitness adds the mean magnitude of negative opposite-direction fitness.
+    The observed statistic and pooled null must use the same recorded method.
     `null_df` is the pooled null written by `spice permute` (see spice.tsg_og.permutation): one row
     per locus that detection found on a positionally-permuted copy of the cohort, so null and
     observed loci come out of the identical detection cascade.
@@ -514,12 +516,13 @@ def assign_p_values(loci_df, null_df, strategy='zpool'):
     validate_table(loci_df)
     validate_table(null_df)
     loci_df = loci_df.copy()
-    loci_df['p_value_raw'] = permutation_p(loci_df, null_df, strategy, column='stat')
+    loci_df['p_value_raw'] = permutation_p(loci_df, null_df, strategy, column='stat', method=method)
     for ls in LENGTH_SCALE_NAMES:
         loci_df[f'p_value_raw_{ls}'] = permutation_p(loci_df, null_df, strategy,
-                                                     column=f'stat_{ls}')
+                                                     column=f'stat_{ls}', method=method)
 
     loci_df['p_value'] = false_discovery_control(loci_df['p_value_raw'].values)
     loci_df[[f'p_value_{ls}' for ls in LENGTH_SCALE_NAMES]] = np.reshape(false_discovery_control(
         loci_df[[f'p_value_raw_{ls}' for ls in LENGTH_SCALE_NAMES]].values, axis=None), (-1, 4))
+    loci_df['p_values_method'] = method
     return loci_df

@@ -630,6 +630,7 @@ def combine_loci(
     mode: str = 'detection',
     final_reoptimization_N_iterations: int = 100_000,
     post_filter_refit_method: str = "joint",
+    p_values_method: str = 'mean_fitness',
 ) -> Tuple[pd.DataFrame, Dict, Dict, pd.DataFrame]:
     """
     Combine results from all chromosomes after loci detection or assignment
@@ -711,7 +712,7 @@ def combine_loci(
             raise ValueError(
                 'calculate_p_value=True needs a permutation null. Build one with `spice permute` '
                 '(or let loci detection build it inline) -- see spice.tsg_og.permutation.')
-        final_loci_df = assign_p_values(loci_df, permutation_null, strategy=p_values_strategy)
+        final_loci_df = assign_p_values(loci_df, permutation_null, strategy=p_values_strategy, method=p_values_method)
         # assign_p_values: p_value_raw = raw p, p_value = BH-FDR q. Remap to canonical raw p / FDR q.
         final_loci_df['q_value'] = final_loci_df['p_value']
         final_loci_df['p_value'] = final_loci_df.pop('p_value_raw')

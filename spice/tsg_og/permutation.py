@@ -22,6 +22,7 @@ NULL_FILENAME = 'permutation_null.tsv'
 UNIT_TEMPLATE = 'permutation_unit_s{seed}_{chrom}.tsv'
 DEFAULT_K = 16
 STRATEGIES = ('zpool', 'zpool_chrom', 'pooled', 'perchrom')
+SCORING_METHODS = ('mean_fitness', 'combined_fitness')
 CHROMOSOME_MODES = ('chromosome_hybrid', 'chromosome_exclusion')
 PERMUTE_MODES = ('rotate', 'uniform') + CHROMOSOME_MODES
 #: If either arm has fewer draws than this, both arms use their chromosome/direction
@@ -49,8 +50,46 @@ def fitness_per_ls(loci_df):
 
 
 def fitness_statistic(loci_df):
-    """The tested statistic: mean over the four same-direction length scales."""
+    """Mean same-direction fitness; retained for detection and fit summaries."""
     return fitness_per_ls(loci_df).mean(axis=1)
+
+
+def scoring_per_ls(loci_df, method='mean_fitness'):
+    """Same-direction positive fitness, optionally plus opposite negative magnitude."""
+    if method not in SCORING_METHODS:
+        raise ValueError(f'Unknown p_values_method: {method}')
+    same = fitness_per_ls(loci_df)
+    if method == 'mean_fitness':
+        return same
+    if not loci_df['type'].isin(['OG', 'TSG']).all():
+        raise ValueError('Unknown locus direction')
+    gain = loci_df['type'].to_numpy() == 'OG'
+    opposite = np.column_stack([np.where(gain, loci_df[f'fitness_{ls}_loss'],
+                                        loci_df[f'fitness_{ls}_gain']) for ls in LENGTH_SCALE_NAMES])
+    if not np.isfinite(same).all() or not np.isfinite(opposite).all():
+        raise ValueError('Nonfinite fitness in combined score')
+    return same + np.maximum(-opposite, 0.)
+
+
+def scoring_statistic(loci_df, method='mean_fitness'):
+    per_scale = scoring_per_ls(loci_df, method)
+    if method == 'mean_fitness':
+        return per_scale.mean(axis=1)
+    # Match the validated A+B definition, including its floating-point order.
+    gain = loci_df['type'].to_numpy() == 'OG'
+    opposite = np.column_stack([np.where(gain, loci_df[f'fitness_{ls}_loss'],
+                                        loci_df[f'fitness_{ls}_gain']) for ls in LENGTH_SCALE_NAMES])
+    return fitness_statistic(loci_df) + np.maximum(-opposite, 0.).mean(axis=1)
+
+
+def validate_null_scoring(null_df, method):
+    if method not in SCORING_METHODS:
+        raise ValueError(f'Unknown p_values_method: {method}')
+    if 'p_values_method' not in null_df:
+        if method != 'mean_fitness':
+            raise ValueError('Untagged mean-fitness null cannot score combined_fitness; re-pool signed null loci')
+    elif not null_df.p_values_method.eq(method).all():
+        raise ValueError('Null p_values_method does not match observed scoring')
 
 
 def _direction(loci_df):
@@ -329,7 +368,7 @@ def assign_arm(chrom, pos, bounds=None):
     return np.where(np.asarray(pos, float) < mid, 'p', 'q')
 
 
-def null_from_loci(loci_frames):
+def null_from_loci(loci_frames, method='mean_fitness'):
     """Pool per-permutation loci tables into the null: one row per null locus.
 
     Keeps chrom, direction, ARM, pos, the aggregate statistic and the four per-scale values. `arm`
@@ -350,12 +389,15 @@ def null_from_loci(loci_frames):
             modes.update(df.permutation_mode.unique())
         else:
             untagged = True
-        per_ls = fitness_per_ls(df)
+        per_ls = scoring_per_ls(df, method)
         parts.append(pd.DataFrame({
             'chrom': df['chrom'].to_numpy(), 'direction': _direction(df),
             'arm': assign_arm(df['chrom'].to_numpy(), df['pos'].to_numpy(), bounds),
             'pos': df['pos'].to_numpy(float),
-            'stat': per_ls.mean(axis=1),
+            'stat': scoring_statistic(df, method),
+            'p_values_method': method,
+            **{f'fitness_{ls}_{dr}': df[f'fitness_{ls}_{dr}'].to_numpy(float)
+               for ls in LENGTH_SCALE_NAMES for dr in ('gain', 'loss')},
             **{f'stat_{ls}': per_ls[:, j] for j, ls in enumerate(LENGTH_SCALE_NAMES)}}))
     if not parts:
         raise ValueError('no null loci: every permutation produced an empty loci table')
@@ -395,7 +437,7 @@ def _strata(chrom, direction, arm, null_df, level):
             for c, d, a in zip(chrom, direction, arm)]
 
 
-def permutation_p(loci_df, null_df, strategy='zpool', column='stat'):
+def permutation_p(loci_df, null_df, strategy='zpool', column='stat', method='mean_fitness'):
     """Empirical p of each observed locus against the pooled permutation null.
 
     `zpool` standardizes within (chromosome, direction, arm), then pools the standardized
@@ -416,6 +458,7 @@ def permutation_p(loci_df, null_df, strategy='zpool', column='stat'):
     """
     if strategy not in STRATEGIES:
         raise ValueError(f'strategy must be one of {STRATEGIES}, got {strategy!r}')
+    validate_null_scoring(null_df, method)
     if 'permutation_mode' in null_df:
         for mode in CHROMOSOME_MODES:
             if (null_df.permutation_mode == mode).any():
@@ -423,8 +466,8 @@ def permutation_p(loci_df, null_df, strategy='zpool', column='stat'):
                 validate_permutation_strategy(mode, strategy)
     if not len(loci_df):
         return np.zeros(0)
-    obs_stat = (fitness_statistic(loci_df) if column == 'stat'
-                else fitness_per_ls(loci_df)[:, LENGTH_SCALE_NAMES.index(column.split('_', 1)[1])])
+    obs_stat = (scoring_statistic(loci_df, method) if column == 'stat'
+                else scoring_per_ls(loci_df, method)[:, LENGTH_SCALE_NAMES.index(column.split('_', 1)[1])])
     direction = _direction(loci_df)
     chrom = loci_df['chrom'].to_numpy()
 
