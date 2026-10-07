@@ -47,7 +47,7 @@ def test_scoring_identity_rejects_mixed_or_legacy_null_for_combined_method():
     with pytest.raises(ValueError, match='Untagged'):
         permutation_p(d, legacy, 'zpool_chrom', method='combined_fitness')
     combined = null_from_loci([d], method='combined_fitness')
-    with pytest.raises(ValueError, match='does not match'):
+    with pytest.raises(ValueError, match='Unknown p_values_method'):
         permutation_p(d, combined, 'zpool_chrom', method='mean_fitness')
     combined.loc[0,'p_values_method'] = 'mean_fitness'
     with pytest.raises(ValueError, match='does not match'):

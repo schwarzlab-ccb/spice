@@ -483,20 +483,14 @@ def _invalidate_permutation_tables(loci_results_dir, index):
 
 
 def _check_permutation_chrom_mode(unit_dir, chrom, mode, write=False):
-    """Keep scattered fits from being mixed across chromosome/legacy null modes."""
+    """Reject scattered caches explicitly tagged with an incompatible null mode."""
     import json
-    from spice.tsg_og.permutation import CHROMOSOME_MODES
     marker = os.path.join(unit_dir, f'permutation_mode_{chrom}.json')
     if os.path.exists(marker):
         with open(marker) as handle:
             recorded = json.load(handle)
         if recorded != {'mode': mode, 'chrom': chrom}:
             raise ValueError(f'Permutation cache mode mismatch for {chrom}; use a fresh output directory')
-    elif mode in CHROMOSOME_MODES:
-        old_cache = (os.path.exists(os.path.join(unit_dir, 'detection', chrom)) or
-                     os.path.exists(os.path.join(unit_dir, 'data_per_length_scale', f'{chrom}.pickle')))
-        if not write or old_cache:
-            raise ValueError(f'{mode} permutation cache lacks provenance for {chrom}; use a fresh output directory')
     if write:
         os.makedirs(unit_dir, exist_ok=True)
         with open(marker, 'w') as handle:
@@ -611,7 +605,7 @@ def _build_permutation_null(raw_events, config, loci_params, loci_results_dir, c
         logger.info(f'Permutation {seed}/{K}')
         frames.append(_run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms,
                                             seed, permute_mode, steps, args, config))
-    return permutation.null_from_loci(frames, method=loci_params.get('p_values_method', 'mean_fitness'))
+    return permutation.null_from_loci(frames, method=loci_params.get('p_values_method', 'combined_fitness'))
 
 
 def main_permute(args):
@@ -650,7 +644,7 @@ def main_permute(args):
     os.makedirs(loci_results_dir, exist_ok=True)
     K = args.permutations or int(loci_params.get('p_values_K', permutation.DEFAULT_K))
     mode = args.mode or loci_params.get('p_values_permute_mode', 'rotate')
-    permutation.validate_permutation_strategy(mode, loci_params.get('p_values_strategy', 'zpool'))
+    permutation.validate_permutation_strategy(mode, loci_params.get('p_values_strategy', 'zpool_chrom'))
     steps = args.loci_steps or loci_params['loci_steps']
     if hasattr(steps, '__iter__') and not isinstance(steps, str) and len(steps) == 1:
         steps = steps[0]
@@ -688,7 +682,7 @@ def main_permute(args):
             # Untagged historical units remain usable with legacy modes only.
             unit_frame['permutation_mode'] = mode
             frames.append(unit_frame)
-        null_df = permutation.null_from_loci(frames, method=loci_params.get('p_values_method', 'mean_fitness'))
+        null_df = permutation.null_from_loci(frames, method=loci_params.get('p_values_method', 'combined_fitness'))
         null_df.to_csv(null_path, sep='\t', index=False)
         logger.info(f'Pooled {len(frames)} permutation units -> {len(null_df):,} null loci '
                     f'at {null_path}')
@@ -726,7 +720,7 @@ def main_permute(args):
     if args.index is not None:
         logger.info(f'Permutation s{args.index} complete; pool with `spice permute --pool`.')
         return
-    null_df = permutation.null_from_loci(frames, method=loci_params.get('p_values_method', 'mean_fitness'))
+    null_df = permutation.null_from_loci(frames, method=loci_params.get('p_values_method', 'combined_fitness'))
     null_df.to_csv(null_path, sep='\t', index=False)
     logger.info(f'Built the permutation null from {K} permutations: {len(null_df):,} loci '
                 f'-> {null_path}')
@@ -846,7 +840,7 @@ def main_loci_detection(args):
                          "with --loci-steps combine (the cross-chromosome combine runs without --chrom).")
     calc_p = loci_params.get('calculate_p_value', True)
     p_values_K = int(loci_params.get('p_values_K', permutation.DEFAULT_K))
-    p_values_strategy = loci_params.get('p_values_strategy', 'zpool')
+    p_values_strategy = loci_params.get('p_values_strategy', 'zpool_chrom')
     p_values_permute_mode = loci_params.get('p_values_permute_mode', 'rotate')
     if calc_p:
         permutation.validate_permutation_strategy(p_values_permute_mode, p_values_strategy)
@@ -941,7 +935,7 @@ def main_loci_detection(args):
         mean_fitness_threshold=mean_fit_thresh,
         permutation_null=null_df,
         p_values_strategy=p_values_strategy,
-        p_values_method=loci_params.get('p_values_method', 'mean_fitness'),
+        p_values_method=loci_params.get('p_values_method', 'combined_fitness'),
         overwrite=args.overwrite,
         mode='detection',
         final_reoptimization_N_iterations=loci_params['final_reoptimization_N_iterations'],
@@ -989,7 +983,7 @@ def _load_permutation_null_or_none(loci_results_dir):
     if os.path.exists(path):
         frame = pd.read_csv(path, sep='\t')
         mode = spice.config['loci_detection'].get('p_values_permute_mode', 'rotate')
-        permutation.validate_permutation_strategy(mode, spice.config['loci_detection'].get('p_values_strategy', 'zpool'))
+        permutation.validate_permutation_strategy(mode, spice.config['loci_detection'].get('p_values_strategy', 'zpool_chrom'))
         permutation.validate_null_mode(frame, mode)
         return frame
     return None
@@ -1059,7 +1053,7 @@ def main_loci_assignment(args):
         permutation_null=_load_permutation_null_or_none(
             os.path.join(config['directories']['results_dir'], config['name'],
                          'loci_of_selection')),
-        p_values_strategy=loci_params.get('p_values_strategy', 'zpool'),
+        p_values_strategy=loci_params.get('p_values_strategy', 'zpool_chrom'),
         overwrite=args.overwrite,
         overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
     )
@@ -1302,13 +1296,9 @@ Examples:
     parser_perm.add_argument('--pool', action='store_true',
                              help='Pool the per-unit tables already on disk into the null table '
                                   'and exit, without detecting anything.')
-    parser_perm.add_argument('--mode', choices=('rotate', 'uniform', 'chromosome_hybrid', 'chromosome_exclusion'), default=None,
-                             help="Positional model: 'rotate' shifts each (sample, chrom, arm) "
-                                  "circularly, cutting only between events; 'uniform' places each "
-                                  "event independently within its arm; chromosome_hybrid permits either arm "
-                                  "and centromere-spanning long events; chromosome_exclusion excludes either "
-                                  "endpoint inside the centromere at any event length. "
-                                  "Default from p_values_permute_mode.")
+    parser_perm.add_argument('--mode', choices=('rotate',), default=None,
+                             help="Rotate each sample/chromosome/arm circularly, cutting only "
+                                  "between events. Default from p_values_permute_mode.")
     parser_perm.add_argument('--loci-steps', nargs='+', default=None,
                              help='Detection steps for the permuted cohorts; must match the real '
                                   'run or the null is not comparable. Default: the config value.')

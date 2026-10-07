@@ -485,11 +485,11 @@ def calc_overlap_pairs(loci_1, loci_2):
     return np.array(cur_pairs)
 
 
-def assign_p_values(loci_df, null_df, strategy='zpool', method='mean_fitness'):
+def assign_p_values(loci_df, null_df, strategy='zpool_chrom', method='combined_fitness'):
     """Assign the FITNESS p-value to loci from the POSITIONAL-PERMUTATION null.
 
-    mean_fitness tests the mean over four same-direction length scales.
-    combined_fitness adds the mean magnitude of negative opposite-direction fitness.
+    combined_fitness is mean positive same-direction fitness plus mean magnitude
+    of negative opposite-direction fitness, across all four length scales (A+B).
     The observed statistic and pooled null must use the same recorded method.
     `null_df` is the pooled null written by `spice permute` (see spice.tsg_og.permutation): one row
     per locus that detection found on a positionally-permuted copy of the cohort, so null and
@@ -502,10 +502,7 @@ def assign_p_values(loci_df, null_df, strategy='zpool', method='mean_fitness'):
     Args:
         loci_df: the combined loci table to score.
         null_df: pooled permutation null (columns chrom, direction, stat, stat_<ls>).
-        strategy: 'zpool' (default), 'pooled' or 'perchrom' -- how the null is stratified before the
-            empirical p is read. See permutation.permutation_p. 'perchrom' is a diagnostic only: a
-            permutation yields ~6-8 loci per chromosome, so its per-stratum reference is far too
-            small for the FDR to ever reach significance.
+        strategy: 'zpool_chrom'; null-only chromosome/direction standardization.
     """
     if strategy not in STRATEGIES:
         raise ValueError(f'strategy must be one of {STRATEGIES}, got {strategy!r}')

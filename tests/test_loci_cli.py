@@ -33,6 +33,8 @@ def temp_workspace_with_loci():
         
         # Copy and filter final_events data to chr1 only
         pcawg_events = os.path.join(repo_root, 'data', 'pcawg_final_events_chr1_chr2.tsv')
+        if not os.path.exists(pcawg_events):
+            pytest.skip('Optional PCAWG loci integration fixture is not installed: ' + pcawg_events)
         if os.path.exists(pcawg_events):
             df = pd.read_csv(pcawg_events, sep='\t')
             # Filter to chr1 only to save time

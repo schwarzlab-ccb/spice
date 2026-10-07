@@ -625,12 +625,12 @@ def combine_loci(
     p_value_threshold: float = 0.05,
     mean_fitness_threshold: Optional[float] = None,
     permutation_null: Optional[pd.DataFrame] = None,
-    p_values_strategy: str = 'zpool',
+    p_values_strategy: str = 'zpool_chrom',
     overwrite: bool = False,
     mode: str = 'detection',
     final_reoptimization_N_iterations: int = 100_000,
     post_filter_refit_method: str = "joint",
-    p_values_method: str = 'mean_fitness',
+    p_values_method: str = 'combined_fitness',
 ) -> Tuple[pd.DataFrame, Dict, Dict, pd.DataFrame]:
     """
     Combine results from all chromosomes after loci detection or assignment
@@ -728,8 +728,8 @@ def combine_loci(
         # BOTH post-null drops, applied together so the selection points and widths stay in step with
         # the table. They are deliberately here and not in detection:
         #   q_value          -- significance against the permutation null.
-        #   mean fitness     -- an ABSOLUTE floor on the same statistic the p-value ranks
-        #                       (permutation.fitness_statistic). spice also has a detection-time
+        #   mean fitness     -- an optional ABSOLUTE floor on same-direction fitness A
+        #                       (permutation.fitness_statistic), separate from A+B scoring. spice also has a detection-time
         #                       version of this, `th_locus_mean_fitness`; applying it THERE also
         #                       filters the permutation null, because the null is built by re-running
         #                       detection on permuted events, and a null exists to produce weak loci.
@@ -945,7 +945,7 @@ def loci_assignment(
     N_iterations_optim: int = 11_000,
     p_value_threshold: float = 0.05,
     permutation_null: Optional[pd.DataFrame] = None,
-    p_values_strategy: str = 'zpool',
+    p_values_strategy: str = 'zpool_chrom',
     overwrite: bool = False,
     overwrite_preprocessing: bool = False,
     calculate_p_value: bool = True,

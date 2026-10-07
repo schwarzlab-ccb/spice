@@ -119,55 +119,9 @@ Rerunning a permutation unit invalidates its combined table and the pooled null.
 once all units finish. `spice permute --config <config> --pool --overwrite` also forces
 recombination of existing per-chromosome results, without rerunning detection.
 
-An opt-in chromosome-wide null is available with:
-
-```yaml
-loci_detection:
-  p_values_permute_mode: chromosome_hybrid
-  p_values_strategy: zpool_chrom
-```
-
-Events no longer than the shorter usable arm must fit wholly in either arm.
-Longer events may also span the centromere, preserving physical width with both
-endpoints outside the gap. A chromosome with one usable arm stays within that
-arm. Starts are sampled uniformly over legal integer coordinates, independently
-per event; sample/direction/widths are retained but event spacing is not. Events
-with no legal placement remain fixed and are counted in the log.
-
-Hybrid mode preprocesses the observed events first, then randomizes the retained
-set without filtering it again. This keeps newly spanning events in the null.
-Use `zpool_chrom` or `perchrom`; `zpool` would condition on arm membership again
-and is rejected. Use a fresh output directory/null. Mode-tagged tables and
-per-chromosome cache markers prevent mixing old arm-restricted results into the
-new null. This is implemented and unit-tested, not yet empirically calibrated.
-`--mode chromosome_hybrid` is also accepted by `spice permute`, but the config
-must use the corresponding chromosome scoring strategy.
-
-An alternative opt-in mode, `chromosome_exclusion`, removes the shorter-arm
-length threshold:
-
-```yaml
-loci_detection:
-  p_values_permute_mode: chromosome_exclusion
-  p_values_strategy: zpool_chrom
-```
-
-For an event with coordinate span `L = end - start` and centromere interior
-`(Cstart, Cend)`, exclude start positions in `(Cstart, Cend)` or in
-`(Cstart - L, Cend - L)`. Draw uniformly from all remaining integer starts where
-the complete event fits within the observed chromosome bounds. Thus neither
-endpoint can fall inside the centromere, while events of any length can span it
-if their geometry permits. Contact with the centromere boundaries is allowed.
-The stored model width is preserved even when it differs from the coordinate span.
-One usable arm restricts placement to that arm; events with no legal placement
-remain fixed and are logged. Non-internal events remain unchanged.
-
-Like hybrid mode, this mode preprocesses before permutation and requires
-`zpool_chrom` or `perchrom`. Use a fresh output directory and generate a fresh,
-mode-tagged null when enabling it; hybrid, legacy, and exclusion caches cannot be
-mixed. `spice permute --mode chromosome_exclusion` is also supported. The default
-remains `rotate`; implementing this mode does not replace existing nulls. Placement
-and workflow tests use synthetic fixtures; empirical calibration is pending.
+Production supports only the `rotate` null and `combined_fitness` (A+B) with
+`zpool_chrom` calibration. Older shuffle and p-value options are rejected.
+See [FIXES.md](FIXES.md) for the retained changes and reproducibility settings.
 
 The CLI/config default is `loci_detection.N_bootstrap: 100` for the signal's
 2.5% and 97.5% bootstrap quantiles. This is a runtime/storage compromise; use
@@ -436,13 +390,14 @@ The default permutation mode, `rotate`, applies a shared circular offset to inte
 events within each sample/chromosome/arm. It chooses a cut uniformly from integer
 positions in gaps or at event boundaries, preserving widths, overlaps, and circular
 spacing without splitting events. Dense groups have fewer legal cuts; an arm-spanning
-event prevents its group from moving. `uniform` instead places events independently
-within their arms. Events outside the observed arm bounds remain fixed.
+event prevents its group from moving. Events outside the observed arm bounds remain fixed.
 
-The default fitness p-value strategy, `zpool`, standardizes null loci within each
-chromosome, direction, and arm before pooling them. When either arm has fewer than 20
-null loci, both arms use their combined chromosome/direction stratum. This includes
-arms with zero null loci, and each null locus enters the pooled reference once.
+The fitness statistic is A+B: mean positive same-direction fitness plus mean
+negative opposite-direction magnitude across the four scales. `zpool_chrom`
+standardizes within chromosome/direction using null-only mean and sample standard
+deviation, pools standardized null draws, and uses an inclusive upper tail with
+add-one correction. BH adjustment covers all observed loci in the cohort/seed.
+Missing null strata score p=1; zero variance uses a denominator of one.
 
 To combine previously detected chromosomes, use
 `spice loci_detection --config <config> --loci-steps combine`. If no pooled permutation
@@ -455,8 +410,8 @@ commands before combining.
 After upgrading from earlier `p-explore` results, use a new run name/directory and
 regenerate observed fits and every permutation unit. Previous caches and null tables
 encode the old RNG and rotation behavior; re-pooling those fits does not update them.
-The revised rotation and arm fallback change p/q values, so previous calibration and
-power measurements need to be rerun before being applied to these results.
+Use matching signed A+B null tables and the current rotation implementation;
+legacy mean-fitness null statistics cannot be used directly.
 
 ### 4.3 Expected Output
 

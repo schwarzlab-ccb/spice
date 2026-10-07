@@ -13,10 +13,10 @@ def validate_config(params):
             raise ValueError(f'{key} requires {supported} on fixes; experimental features '
                              'remain on anyscale-pvalue')
     from spice.tsg_og.permutation import SCORING_METHODS, validate_permutation_strategy
-    if params.get('p_values_method', 'mean_fitness') not in SCORING_METHODS:
+    if params.get('p_values_method', 'combined_fitness') not in SCORING_METHODS:
         raise ValueError('Unsupported p_values_method on fixes')
     validate_permutation_strategy(params.get('p_values_permute_mode', 'rotate'),
-                                  params.get('p_values_strategy', 'zpool'))
+                                  params.get('p_values_strategy', 'zpool_chrom'))
 
 
 def validate_cache(root, chrom):

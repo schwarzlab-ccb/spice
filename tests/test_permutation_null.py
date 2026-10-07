@@ -103,22 +103,7 @@ class TestPValue:
         assert all(f'stat_{ls}' in null.columns for ls in LENGTH_SCALE_NAMES)
         assert set(null['arm']) <= {'p', 'q'}
 
-    def test_zpool_needs_an_arm_column(self):
-        """A null pooled before arm stratification must fail loudly, not silently mis-stratify."""
-        null = null_from_loci([_loci(20, 0)]).drop(columns=['arm'])
-        with pytest.raises(ValueError, match='arm'):
-            permutation_p(_loci(6, 1), null, 'zpool')
 
-    def test_thin_arm_strata_fall_back_to_the_chromosome(self):
-        """An arm with < MIN_STRATUM_DRAWS null loci is scored against its whole chromosome."""
-        from spice.tsg_og.permutation import MIN_STRATUM_DRAWS, _strata
-        null = null_from_loci([_loci(60, s) for s in range(6)])
-        counts = null.groupby(['chrom', 'direction', 'arm']).size()
-        thin = [k for k, v in counts.items() if v < MIN_STRATUM_DRAWS]
-        keys = _strata(null['chrom'].to_numpy(), null['direction'].to_numpy(),
-                       null['arm'].to_numpy(), null, 'arm')
-        for c, d, a in thin:                      # a thin arm collapses to a 2-tuple
-            assert (c, d) in keys
 
     def test_null_from_loci_rejects_all_empty(self):
         with pytest.raises(ValueError, match='no null loci'):
@@ -137,45 +122,16 @@ class TestPValue:
         null = null_from_loci([_loci(30, 0)])
         obs = _loci(2, 0).assign(**{f'fitness_{ls}_gain': 1e6 for ls in LENGTH_SCALE_NAMES})
         obs['type'] = 'OG'
-        p = permutation_p(obs, null, 'pooled')
-        assert p[0] == pytest.approx(1 / (len(null[null.direction == 'gain']) + 1))
+        p = permutation_p(obs, null, 'zpool_chrom')
+        assert p[0] == pytest.approx(1 / (len(null) + 1))
 
     def test_rejects_unknown_strategy(self):
         with pytest.raises(ValueError, match='strategy'):
             permutation_p(_loci(), null_from_loci([_loci()]), 'nope')
 
 
-@pytest.mark.parametrize('n_p', [0, 5, 19, 20])
-def test_arm_fallback_uses_a_disjoint_whole_chromosome(n_p):
-    from spice.tsg_og.permutation import _strata
-    null = pd.DataFrame({'chrom': ['chr1'] * (n_p + 100),
-                         'direction': ['gain'] * (n_p + 100),
-                         'arm': ['p'] * n_p + ['q'] * 100})
-    keys = _strata(null.chrom, null.direction, null.arm, null, 'arm')
-    if n_p < 20:
-        assert keys == [('chr1', 'gain')] * len(null)
-        assert _strata(['chr1'], ['gain'], ['p'], null, 'arm') == [('chr1', 'gain')]
-    else:
-        assert keys.count(('chr1', 'gain', 'p')) == 20
-        assert keys.count(('chr1', 'gain', 'q')) == 100
 
 
-@pytest.mark.parametrize('n_p', [0, 5])
-def test_sparse_arm_p_value_matches_whole_chromosome_calibration(n_p, monkeypatch):
-    from spice.tsg_og import permutation
-    monkeypatch.setattr(permutation, 'arm_bounds', lambda: BOUNDS)
-    values = np.r_[np.arange(1, n_p + 1), np.linspace(10, 20, 100)]
-    null = pd.DataFrame({'chrom': 'chr1', 'direction': 'gain',
-                         'arm': ['p'] * n_p + ['q'] * 100, 'stat': values})
-    obs = _loci(1).assign(chrom='chr1', type='OG', pos=20e6)
-    for ls in LENGTH_SCALE_NAMES:
-        obs[f'fitness_{ls}_gain'] = 12.0
-    augmented = np.r_[values, 12.0]
-    z_obs = (12 - augmented.mean()) / augmented.std(ddof=1)
-    z_null = (values - values.mean()) / values.std(ddof=1)
-    expected = (np.count_nonzero(z_null >= z_obs) + 1) / (len(values) + 1)
-    assert permutation_p(obs, null)[0] == pytest.approx(expected)
-    assert expected < 1
 
 
 
@@ -203,7 +159,7 @@ def test_rotation_preserves_circular_spacing_and_overlaps_with_unequal_widths():
     assert len(observed_moves) > 1
 
 
-@pytest.mark.parametrize('mode', ['rotate', 'uniform'])
+@pytest.mark.parametrize('mode', ['rotate'])
 def test_arm_spanning_event_has_no_room_to_move(mode):
     ev = pd.DataFrame({'sample': ['S'], 'chrom': 'chr1', 'pos': 'internal',
                        'start': [0], 'end': [1000], 'width': [1000]})
@@ -245,179 +201,38 @@ def test_rotation_samples_each_legal_integer_cut_once():
     assert sorted(offsets) == sorted((-cut) % 10 for cut in legal)
 
 
-class TestChromosomeHybrid:
-    @pytest.mark.parametrize('bounds', [(0, 4, 6, 15), (4, 0, 6, 15), (0, 4, 15, 15), (0, 4, 4, 15)])
-    def test_all_legal_integer_starts_sampled_exactly_once(self, bounds):
-        from spice.tsg_og.permutation import _hybrid_start_ranges, _draw_start
-        p_lo, p_hi, q_lo, q_hi = bounds
-        arms = [(lo, hi) for lo, hi in [(p_lo,p_hi),(q_lo,q_hi)] if hi > lo]
-        for width in range(1, 18):
-            allow_bridge = len(arms)==2 and width>min(hi-lo for lo,hi in arms)
-            legal = [start for start in range(16) if
-                     any(lo <= start and start+width <= hi for lo,hi in arms) or
-                     (allow_bridge and p_lo <= start <= p_hi and q_lo <= start+width <= q_hi)]
-            ranges = _hybrid_start_ranges(width, bounds)
-            class FixedDraw:
-                def __init__(self, draw): self.draw=draw
-                def integers(self, high):
-                    assert high==len(legal)
-                    return self.draw
-            if legal:
-                assert [_draw_start(ranges,FixedDraw(i)) for i in range(len(legal))]==legal
-            else:
-                assert _draw_start(ranges,FixedDraw(0)) is None
-
-    def test_short_events_move_between_arms_and_long_events_bridge(self):
-        ev=pd.DataFrame({'sample':['S']*400,'chrom':'chr1','pos':'internal',
-                         'start':60,'width':[20]*200+[60]*200,'type':['gain','loss']*200})
-        ev['end']=ev.start+ev.width
-        out,moved,fixed=permute_events(ev,7,mode='chromosome_hybrid',bounds={'chr1':(0,40,50,140)})
-        short,long=out.iloc[:200],out.iloc[200:]
-        assert (short.end<=40).any() and (short.start>=50).any()
-        assert ((short.end<=40)|(short.start>=50)).all()
-        assert ((long.start<=40)&(long.end>=50)).any()
-        assert (long.start>=50).any()
-        assert ((out.start<=40)|(out.start>=50)).all()
-        assert ((out.end<=40)|(out.end>=50)).all()
-        assert (out.start>=0).all() and (out.end<=140).all()
-        np.testing.assert_array_equal(out.end-out.start,ev.width)
-        pd.testing.assert_frame_equal(out.drop(columns=['start','end']),ev.drop(columns=['start','end']))
-        assert moved+fixed==len(ev)
-        repeated=permute_events(ev,7,mode='chromosome_hybrid',bounds={'chr1':(0,40,50,140)})[0]
-        pd.testing.assert_frame_equal(out,repeated)
-        other=permute_events(ev,8,mode='chromosome_hybrid',bounds={'chr1':(0,40,50,140)})[0]
-        assert not out.start.equals(other.start)
-
-    def test_single_arm_noninternal_and_unplaceable_events(self):
-        ev=pd.DataFrame({'sample':['S']*3,'chrom':'chr1','pos':['internal','internal','whole_arm'],
-                         'start':[60,0,0],'width':[20,160,40],'end':[80,160,40]})
-        out,moved,fixed=permute_events(ev,7,mode='chromosome_hybrid',bounds={'chr1':(20,0,50,140)})
-        assert 50<=out.start.iloc[0] and out.end.iloc[0]<=140
-        pd.testing.assert_frame_equal(out.iloc[1:],ev.iloc[1:])
-        assert moved+fixed==2
-
-    def test_invalid_geometry_and_width_rejected(self):
-        from spice.tsg_og.permutation import _hybrid_start_ranges
-        for width,bounds in [(0,(0,40,50,140)),(1.5,(0,40,50,140)),(10,(0,60,50,140)),(10,(0,np.nan,50,140))]:
-            with pytest.raises(ValueError): _hybrid_start_ranges(width,bounds)
-
-    def test_null_provenance_and_chromosome_calibration(self):
-        from spice.tsg_og.permutation import validate_null_mode, validate_permutation_strategy
-        hybrid=_loci().assign(permutation_mode='chromosome_hybrid')
-        null=null_from_loci([hybrid])
-        validate_null_mode(null,'chromosome_hybrid')
-        validate_permutation_strategy('chromosome_hybrid','zpool_chrom')
-        validate_permutation_strategy('chromosome_hybrid','perchrom')
-        with pytest.raises(ValueError): validate_permutation_strategy('chromosome_hybrid','zpool')
-        with pytest.raises(ValueError): permutation_p(_loci(),null,'zpool')
-        assert np.isfinite(permutation_p(_loci(),null,'zpool_chrom')).all()
-        with pytest.raises(ValueError): validate_null_mode(null,'rotate')
-        with pytest.raises(ValueError): validate_null_mode(null.drop(columns='permutation_mode'),'chromosome_hybrid')
-        with pytest.raises(ValueError): null_from_loci([hybrid,_loci()])
-        with pytest.raises(ValueError): null_from_loci([hybrid,hybrid.assign(permutation_mode='rotate')])
 
 
-def test_hybrid_preserves_coordinate_span_and_distinct_model_width():
-    # Imported records can have a model width different from endpoint distance.
-    # The model width must not shrink/stretch the interval during permutation.
-    events = pd.DataFrame(dict(chrom=['chr1']*400, sample=['S']*400,
-        pos=['internal']*400, start=[60]*400, end=[120]*200+[80]*200,
-        width=[20]*200+[60]*200, type=['gain']*400))
-    out, moved, fixed = permute_events(events, 7, mode='chromosome_hybrid',
-                                      bounds={'chr1': (0,40,50,140)})
-    np.testing.assert_array_equal(out.end-out.start, events.end-events.start)
-    pd.testing.assert_frame_equal(out.drop(columns=['start','end']), events.drop(columns=['start','end']))
-    long = out.iloc[:200]
-    assert ((long.start <= 40) & (long.end >= 50)).any()
-    short = out.iloc[200:]
-    assert (((short.start >= 0) & (short.end <= 40)) |
-            ((short.start >= 50) & (short.end <= 140))).all()
-    assert moved+fixed == len(events)
 
 
-class TestChromosomeExclusion:
-    @pytest.mark.parametrize('bounds', [
-        (0, 4, 6, 15), (0, 7, 12, 20), (4, 0, 6, 15),
-        (0, 4, 15, 15), (4, 0, 15, 15), (0, 4, 4, 15),
-        (0.5, 4.5, 6.5, 15.5), (-3, 4, 6, 15)])
-    def test_every_legal_start_sampled_once(self, bounds):
-        from spice.tsg_og.permutation import _exclusion_start_ranges, _draw_start
-        p_lo, p_hi, q_lo, q_hi = bounds
-        arms = [(lo, hi) for lo, hi in [(p_lo, p_hi), (q_lo, q_hi)] if hi > lo]
-        for width in range(1, 25):
-            # Independent endpoint-membership oracle, including boundary contact.
-            legal = [start for start in range(-5, 25)
-                     if any(lo <= start <= hi for lo, hi in arms)
-                     and any(lo <= start+width <= hi for lo, hi in arms)]
-            ranges = _exclusion_start_ranges(width, bounds)
-            class FixedDraw:
-                def __init__(self, draw): self.draw = draw
-                def integers(self, high):
-                    assert high == len(legal)
-                    return self.draw
-            if legal:
-                assert [_draw_start(ranges, FixedDraw(i)) for i in range(len(legal))] == legal
-            else:
-                assert _draw_start(ranges, FixedDraw(0)) is None
 
-    def test_short_events_bridge_and_model_width_is_preserved(self):
-        events = pd.DataFrame(dict(chrom=['chr1']*400, sample=['S']*400,
-            pos=['internal']*400, start=[60]*400, end=[80]*200+[120]*200,
-            width=[60]*200+[20]*200, type=['gain', 'loss']*200))
-        original = events.copy(deep=True)
-        bounds = {'chr1': (0, 40, 50, 140)}
-        out, moved, fixed = permute_events(events, 7, mode='chromosome_exclusion', bounds=bounds)
-        short = out.iloc[:200]
-        assert ((short.start <= 40) & (short.end >= 50)).any()
-        assert (short.end <= 40).any() and (short.start >= 50).any()
-        for endpoint in [out.start, out.end]:
-            assert ((endpoint <= 40) | (endpoint >= 50)).all()
-        assert (out.start >= 0).all() and (out.end <= 140).all()
-        np.testing.assert_array_equal(out.end-out.start, events.end-events.start)
-        pd.testing.assert_frame_equal(out.drop(columns=['start','end']), events.drop(columns=['start','end']))
-        pd.testing.assert_frame_equal(events, original)
-        assert moved == (out.start != events.start).sum()
-        assert moved+fixed == len(events)
-        repeat = permute_events(events, 7, mode='chromosome_exclusion', bounds=bounds)[0]
-        pd.testing.assert_frame_equal(out, repeat)
-        other = permute_events(events, 8, mode='chromosome_exclusion', bounds=bounds)[0]
-        assert not out.start.equals(other.start)
+@pytest.mark.parametrize('mode', ['uniform', 'chromosome_hybrid', 'chromosome_exclusion', 'chromosome_preserve_bridges'])
+def test_removed_null_modes_are_rejected(mode):
+    with pytest.raises(ValueError, match='mode'):
+        permute_events(_events(), seed=1, mode=mode, bounds=BOUNDS)
+    from spice.tsg_og.permutation import validate_null_mode
+    with pytest.raises(ValueError, match='mismatch'):
+        validate_null_mode(pd.DataFrame({'permutation_mode': [mode]}), 'rotate')
 
-    def test_single_arm_noninternal_and_unplaceable_events(self):
-        events = pd.DataFrame(dict(chrom=['chr1']*3, sample=['S']*3,
-            pos=['internal', 'internal', 'whole_arm'], start=[60, 0, 0],
-            end=[80, 160, 40], width=[20, 160, 40]))
-        out, moved, fixed = permute_events(events, 7, mode='chromosome_exclusion',
-                                           bounds={'chr1': (20, 0, 50, 140)})
-        assert 50 <= out.start.iloc[0] and out.end.iloc[0] <= 140
-        pd.testing.assert_frame_equal(out.iloc[1:], events.iloc[1:])
-        assert moved+fixed == 2
-        with pytest.raises(ValueError, match='Missing'):
-            permute_events(events, 7, mode='chromosome_exclusion', bounds={})
 
-    @pytest.mark.parametrize('width,bounds', [
-        (0, (0,40,50,140)), (1.5, (0,40,50,140)), (-1, (0,40,50,140)),
-        (10, (0,60,50,140)), (10, (0,np.nan,50,140)), (np.inf, (0,40,50,140))])
-    def test_invalid_geometry(self, width, bounds):
-        from spice.tsg_og.permutation import _exclusion_start_ranges
-        with pytest.raises(ValueError):
-            _exclusion_start_ranges(width, bounds)
+@pytest.mark.parametrize('strategy', ['zpool', 'pooled', 'perchrom'])
+def test_removed_calibrations_are_rejected(strategy):
+    with pytest.raises(ValueError, match='strategy'):
+        permutation_p(_loci(), null_from_loci([_loci()]), strategy)
 
-    def test_provenance_and_calibration(self):
-        from spice.tsg_og.permutation import validate_null_mode, validate_permutation_strategy
-        mode = 'chromosome_exclusion'
-        unit = _loci().assign(permutation_mode=mode)
-        null = null_from_loci([unit])
-        validate_null_mode(null, mode)
-        for strategy in ['zpool_chrom', 'perchrom']:
-            validate_permutation_strategy(mode, strategy)
-            assert np.isfinite(permutation_p(_loci(), null, strategy)).all()
-        for strategy in ['zpool', 'pooled']:
-            with pytest.raises(ValueError): validate_permutation_strategy(mode, strategy)
-            with pytest.raises(ValueError): permutation_p(_loci(), null, strategy)
-        with pytest.raises(ValueError): validate_null_mode(null.drop(columns='permutation_mode'), mode)
-        for other in ['rotate', 'chromosome_hybrid']:
-            with pytest.raises(ValueError): validate_null_mode(null, other)
-            with pytest.raises(ValueError): null_from_loci([unit, unit.assign(permutation_mode=other)])
-            mixed = pd.concat([null, null.assign(permutation_mode=other)], ignore_index=True)
-            with pytest.raises(ValueError): permutation_p(_loci(), mixed, 'zpool_chrom')
+
+def test_chromosome_moments_ignore_arms_and_observations():
+    from spice.tsg_og.permutation import scoring_statistic
+    observed = _loci(6, 2)
+    null = null_from_loci([_loci(60, 3)])
+    reference = []
+    for _, g in null.groupby(['chrom', 'direction']):
+        reference.extend((g.stat-g.stat.mean()) / (g.stat.std(ddof=1) or 1))
+    expected = []
+    for row, value in zip(observed.itertuples(), scoring_statistic(observed)):
+        g = null[(null.chrom == row.chrom) & (null.direction == ('gain' if row.type == 'OG' else 'loss'))]
+        z = (value-g.stat.mean()) / (g.stat.std(ddof=1) or 1)
+        expected.append((1 + np.count_nonzero(np.asarray(reference) >= z)) / (1 + len(reference)))
+    np.testing.assert_array_equal(permutation_p(observed, null.drop(columns='arm')), expected)
+    isolated = np.concatenate([permutation_p(observed.iloc[[i]], null) for i in range(len(observed))])
+    np.testing.assert_array_equal(isolated, expected)

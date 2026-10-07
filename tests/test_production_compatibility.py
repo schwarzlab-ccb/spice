@@ -7,9 +7,9 @@ import pytest
 from spice.production_compatibility import validate_cache, validate_config, validate_data, validate_table
 
 
-def test_selected_production_and_legacy_defaults_are_accepted():
+def test_selected_production_and_defaults_are_accepted():
     validate_config({})
-    validate_config(dict(p_values_method='mean_fitness', detection_scale_mode='joint',
+    validate_config(dict(p_values_method='combined_fitness', detection_scale_mode='joint',
                          p_values_strategy='zpool_chrom', p_values_permute_mode='rotate'))
     validate_data({'track': dict(cur_widths=[1], event_geometry=None)})
     validate_table(pd.DataFrame({'stat': [1]}))
@@ -54,3 +54,10 @@ def test_scoring_rejects_experimental_observed_or_null_tables(metadata):
     for observed, null in [(bad, good), (good, bad)]:
         with pytest.raises(ValueError, match='detection_scale_mode|provenance'):
             assign_p_values(observed, null, strategy='zpool_chrom')
+
+
+@pytest.mark.parametrize('params', [dict(p_values_method='mean_fitness'), dict(p_values_strategy='zpool'),
+    dict(p_values_permute_mode='uniform'), dict(p_values_permute_mode='chromosome_hybrid')])
+def test_obsolete_config_is_rejected(params):
+    with pytest.raises(ValueError):
+        validate_config(params)
