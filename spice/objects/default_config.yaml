@@ -4,6 +4,10 @@ directories:
   log_dir: 'logs'
   plot_dir: 'plots'
 
+input_files:
+  # Prepared static grids, containing hg19/ and hg38/; never generated during analysis.
+  segmentations: null
+
 params:
   # Base RNG seed. Every random draw in SPICE derives from it (see spice/random_state.py), so the
   # Overridable per command with --seed

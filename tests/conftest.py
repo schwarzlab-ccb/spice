@@ -64,3 +64,28 @@ def knn_train_data_exists(repo_root_dir):
     """Check if KNN training data exists."""
     knn_data = os.path.join(repo_root_dir, 'spice', 'objects', 'train_events_sv_and_unamb.pickle')
     return os.path.exists(knn_data)
+
+
+@pytest.fixture(scope='session')
+def prepared_segmentations(tmp_path_factory):
+    """Self-contained test references; production grids are prepared externally."""
+    import hashlib
+    import json
+    import numpy as np
+    import pandas as pd
+    from spice.data_loaders import load_chrom_lengths
+    root=tmp_path_factory.mktemp('segmentation_reference')
+    folder=root/'hg19';folder.mkdir()
+    lengths=load_chrom_lengths()
+    manifest=dict(schema=1,assembly='hg19',coordinate_system='0-based inclusive',
+                  chromosome_lengths={c:int(n) for c,n in lengths.items()},files={})
+    for size in [4000,20000,40000,100000,200000]:
+        rows=[]
+        for chrom,length in lengths.items():
+            edges=np.append(np.arange(0,length,size)[:-1],length)
+            rows.append(pd.DataFrame(dict(chrom=chrom,start=edges[:-1],end=edges[1:]-1)))
+        frame=pd.concat(rows,ignore_index=True)
+        path=folder/f'segmentation_{size}.tsv';frame.to_csv(path,sep='\t',index=False)
+        manifest['files'][path.name]=dict(bin_size=size,bins=len(frame),sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    (folder/'manifest.json').write_text(json.dumps(manifest))
+    return root

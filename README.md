@@ -363,6 +363,13 @@ Coming soon!
 
 Loci detection requires:
 
+- **Static segmentation grids**: set `input_files.segmentations` to a directory
+  containing `hg19/` and/or `hg38/`, each with a `manifest.json` and
+  `segmentation_<size>.tsv` tables (`chrom`, `start`, `end`; zero-based inclusive).
+  The pipeline repository tracks these under `data/segmentations/` and supplies
+  `src/data/make_segmentations.py` for explicit offline preparation. SPICE chooses
+  `params.assembly`, validates file checksums and chromosome lengths, and caches
+  parsed grids in memory. It never creates missing grids during analysis.
 - **Event inference results**: `final_events.tsv` produced by the event-inference pipeline.
 - **Observed centromere and telomere tables**: set `input_files.centromeres_observed` and
   `input_files.telomeres_observed` to tables derived from that same cohort. These are
@@ -385,6 +392,7 @@ For example, add these paths to your `cohort_loci.yaml` (relative paths use `dir
 ```yaml
 input_files:
   final_events: data/final_events.tsv
+  segmentations: data/segmentations
   centromeres_observed: data/centromeres_observed.tsv
   telomeres_observed: data/telomeres_observed.tsv
 ```

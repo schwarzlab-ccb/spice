@@ -155,8 +155,10 @@ class TestParallelPattern:
 
 
 
-def test_detection_matches_with_cold_partial_and_warm_preprocessing_cache(tmp_path, repo_root_dir):
+def test_detection_matches_with_cold_partial_and_warm_preprocessing_cache(tmp_path, repo_root_dir, prepared_segmentations, monkeypatch):
     """Exercise real bootstrap/kernel sampling and fitting, including stage resumption."""
+    import spice
+    monkeypatch.setitem(spice.config['input_files'], 'segmentations', str(prepared_segmentations))
     import pandas as pd
     from spice.main_loci_functions import run_loci_detection_per_chrom
     # A small processed cohort makes this test self-contained; no external PCAWG files.

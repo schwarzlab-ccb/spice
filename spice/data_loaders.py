@@ -1,6 +1,10 @@
 import os
+import hashlib
+import json
+from functools import lru_cache
+from pathlib import Path
 import re
-from io import StringIO
+from io import StringIO, BytesIO
 import sys
 
 import pandas as pd
@@ -220,21 +224,61 @@ def verify_assembly(events_df, raise_on_mismatch=True):
         logger.warning(msg)
 
 
-def load_segmentation(size=None, data_loaders_dir_top=DATA_LOADERS_DIR):
-    # import here to avoid circular imports
-    from spice.segmentation import create_segmentation
-    cur_filename = os.path.join(data_loaders_dir_top, 'segmentations', f'segmentation_{int(size)}.pickle')
-    if not os.path.exists(cur_filename):
-        logger.info(f'Creating segmentation with size {size}')
-        if size is not None:
-            segmentation = create_segmentation(size)
-            save_pickle(segmentation, cur_filename)
-        else:
-            raise ValueError('Segmentation file not found and size is None')
-    else:
-        segmentation = open_pickle(cur_filename, fail_if_nonexisting=True)
+def load_segmentation(size=None, segmentations_dir=None):
+    """Read a prepared assembly-specific grid; analysis never creates reference bins.
 
-    return segmentation
+    ``input_files.segmentations`` points to a root containing hg19/ and hg38/.
+    Paths and assembly are read from the live config, not an import-time cache.
+    """
+    import spice
+    if isinstance(size, bool) or size is None or int(size) != size or size <= 0:
+        raise ValueError('Segmentation bin size must be a positive integer')
+    cfg = spice.config
+    root = segmentations_dir or cfg.get('input_files', {}).get('segmentations')
+    if root is None or isinstance(root, bool) or str(root).strip().lower() in ('', 'none'):
+        raise FileNotFoundError(
+            'Set input_files.segmentations to prepared reference grids (hg19/ and hg38/). '
+            'Generate them separately with pipeline-peak-detection/src/data/make_segmentations.py; '
+            'analysis does not create segmentation caches.')
+    root = Path(root)
+    if not root.is_absolute():
+        root = Path(cfg.get('directories', {}).get('base_dir', '.'))/root
+    assembly = get_assembly()
+    folder = root/assembly
+    manifest_path = folder/'manifest.json'
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f'Missing prepared segmentation manifest: {manifest_path}')
+    manifest = json.loads(manifest_path.read_text())
+    lengths = {str(c):int(n) for c,n in load_chrom_lengths().items()}
+    if (manifest.get('schema') != 1 or manifest.get('assembly') != assembly
+            or manifest.get('coordinate_system') != '0-based inclusive'
+            or manifest.get('chromosome_lengths') != lengths):
+        raise ValueError('Segmentation reference does not match the configured assembly')
+    name = f'segmentation_{int(size)}.tsv'
+    record = manifest['files'].get(name)
+    if not record or not (folder/name).is_file():
+        raise FileNotFoundError(f'Missing prepared segmentation: {folder/name}')
+    stat = (folder/name).stat()
+    if record['bin_size'] != int(size):
+        raise ValueError('Segmentation bin size mismatch')
+    # Immutable on disk; cache parsing, keyed by identity AND filesystem revision.
+    # Return a separate frame so caller changes cannot alter the cached reference.
+    return _read_segmentation_reference(str((folder/name).resolve()), record['sha256'],
+        record['bins'], tuple(lengths.items()), stat.st_mtime_ns, stat.st_size).copy(deep=True)
+
+
+@lru_cache(maxsize=16)
+def _read_segmentation_reference(path, sha256, bins, lengths, mtime_ns, size_bytes):
+    content = Path(path).read_bytes()
+    if hashlib.sha256(content).hexdigest() != sha256:
+        raise ValueError(f'Segmentation reference checksum mismatch: {path}')
+    frame = pd.read_csv(BytesIO(content), sep='\t', dtype={'chrom':str, 'start':np.int64, 'end':np.int64})
+    if list(frame.columns) != ['chrom', 'start', 'end'] or len(frame) != bins:
+        raise ValueError('Invalid segmentation reference structure')
+    ends = frame.groupby('chrom', sort=False)['end'].max().to_dict()
+    if ends != {c:n-1 for c,n in lengths}:
+        raise ValueError('Segmentation coordinates do not match chromosome lengths')
+    return pd.DataFrame(index=frame.set_index(['chrom', 'start', 'end']).index)
 
 
 def load_raw_copy_number_data(input_file, alleles=['cn_a', 'cn_b']):

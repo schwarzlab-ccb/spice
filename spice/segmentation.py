@@ -12,21 +12,6 @@ CHROMS = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
 CHROM_LENS = data_loaders.load_chrom_lengths()
 
 
-def create_segmentation(size):
-
-    cur_breakpoint_dict = {
-        chrom: np.append((np.arange(0, CHROM_LENS[chrom], size))[:-1], CHROM_LENS[chrom])
-        for chrom in CHROMS}
-
-    cur_segmentation = pd.DataFrame(
-        index=pd.MultiIndex.from_tuples(
-            [(chrom, cur_breakpoint_dict[chrom][i], cur_breakpoint_dict[chrom][i+1]-1) 
-             for chrom in CHROMS for i in range(len(cur_breakpoint_dict[chrom])-1)],
-             names=['chrom', 'start', 'end']))
-    
-    return cur_segmentation
-
-
 def create_events_in_segmentation(final_events_df, bin_df=100e3, skip_tqdm=False):
     """
     Map events to segmentation bins.
@@ -65,7 +50,7 @@ def create_events_in_segmentation(final_events_df, bin_df=100e3, skip_tqdm=False
 
 def create_events_in_segmentation_full(final_events_df, segmentation=100e3, show_tqdm=False):
     if hasattr(segmentation, '__int__'):
-        segmentation = create_segmentation(segmentation)
+        segmentation = load_segmentation(segmentation)
     else:
         assert isinstance(segmentation, pd.DataFrame)
     if 'pos' not in final_events_df.columns:

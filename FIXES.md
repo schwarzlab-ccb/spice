@@ -92,3 +92,12 @@ This integrates the command into native SPICE only. The external pipeline's
 workflow and production lock still target their previous implementation and need
 a separate migration; its locked preparers reject this newer native revision.
 No existing results were replaced and nothing was pushed.
+
+## Static segmentation references
+
+Analysis now reads explicit assembly-specific TSV grids through
+`input_files.segmentations`. Bin creation moved to the pipeline repository's
+standalone data-preparation script. Missing, modified or wrong-assembly grids
+fail instead of silently populating a size-only cache in the results directory.
+Parsed grids are cached in memory without sharing mutable frames with callers.
+The production bin coordinates and terminal-bin convention are unchanged.

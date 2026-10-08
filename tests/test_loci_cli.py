@@ -15,7 +15,7 @@ import pandas as pd
 
 
 @pytest.fixture
-def temp_workspace_with_loci():
+def temp_workspace_with_loci(prepared_segmentations):
     """Create a temporary workspace with loci detection data (chr1 only for speed)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         # Create necessary subdirectories
@@ -59,6 +59,7 @@ def temp_workspace_with_loci():
                 # tables have to be named here too or loci detection exits with the
                 # `*_observed is not configured` FileNotFoundError. See tests/objects/README.md.
                 **conftest.TEST_OBSERVED_FILES,
+                'segmentations': str(prepared_segmentations),
             },
             'directories': {
                 'base_dir': tmpdir,
