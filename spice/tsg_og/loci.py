@@ -455,15 +455,16 @@ def prominence_overlap_check(loci_df, data_per_length_scale, threshold, segment_
 
 
 def selection_points_from_loci_df(loci_df, cur_chrom, ls_i):
-    return [SelectionPoints(loci=[x]) for x in loci_df.query('chrom == @cur_chrom')[['pos', f'fit_{ls_i}']].values]
+    fitness_col = 'fitness_{}_{}'.format(*LS_I_DICT_REV[ls_i])
+    return [SelectionPoints(loci=[x]) for x in loci_df.query('chrom == @cur_chrom')[['pos', fitness_col]].values]
 
 
 def full_selection_points_from_loci_df(loci_df):
+    """Wrap a loci_df's own (pos, fitness) pairs into SelectionPoints, per chromosome and length scale."""
     all_sp = {}
     for cur_chrom in CHROMS[:-1]:
-        cur_loci = loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom')
-        all_sp[cur_chrom] = [[
-            SelectionPoints(loci=[x]) for x in cur_loci[['pos', f'fit_{ls_i}']].values]
+        all_sp[cur_chrom] = [
+            selection_points_from_loci_df(loci_df.sort_values('rank_on_chrom'), cur_chrom, ls_i)
             for ls_i in range(8)]
     return all_sp
 
