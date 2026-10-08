@@ -1091,7 +1091,7 @@ def main_components(args):
     logger = get_logger('SPICE', spice_prefix=False)
     _apply_seed(args, logger)
     from spice.random_state import get_seed
-    output = run_components(spice.config, get_seed())
+    output = run_components(spice.config, get_seed(), chrom=getattr(args, 'chrom', None))
     logger.info(f'Components saved to {output}')
 
 
@@ -1120,7 +1120,7 @@ Examples:
   # Loci assignment (fitness assignment to predefined loci)
   spice loci_assignment --config <path/to/config>
 
-  # Components from scored detection seeds and a saved reference model
+  # Components from independent detection seeds, with a fresh event-derived model
   spice components --config configs/components_example.yaml
     """
     
@@ -1366,6 +1366,7 @@ Examples:
         help='Group scored seed loci, select components and jointly fit their fitness',
         description='Read unfiltered seed tables and a saved reference model from YAML; '
                     'write all/filtered components with separate fixed-position joint fits.')
+    parser_components.add_argument('--chrom', default=None, help='Group and refit one chromosome (use distinct output names for scatter jobs)')
     parser_components.set_defaults(func=main_components)
     
     # Parse arguments and call the appropriate function

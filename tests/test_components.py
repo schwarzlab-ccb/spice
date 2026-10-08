@@ -175,7 +175,7 @@ def test_yaml_cli_end_to_end_and_refuse_overwrite(tmp_path, model):
     assert (out/'components_all.tsv').read_bytes() == before
 
 
-@pytest.mark.parametrize('key,value', [('n_seeds', 4), ('reference_seed', 9), ('refit_iterations', 0),
+@pytest.mark.parametrize('key,value', [('n_seeds', 4), ('refit_iterations', 0),
     ('selection', dict(method='unknown', min_support=3, threshold=.05)),
     ('selection', dict(method='stouffer_q', min_support=4, threshold=.05))])
 def test_bad_configuration_creates_no_output(tmp_path, model, key, value):

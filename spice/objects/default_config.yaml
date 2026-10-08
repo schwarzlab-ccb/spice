@@ -91,7 +91,9 @@ loci_detection:
 components:
   # Input tables/model are configured under input_files; see configs/components_example.yaml.
   n_seeds: 10 # Must match the number of distinct entries in input_files.component_loci
-  reference_seed: 9 # Identity of the supplied saved model; params.seed controls refit RNG
+  model_seed: 0 # Fresh component model RNG; independent of detection IDs and refit params.seed
+  N_bootstrap: 1000 # Component model signal bounds
+  N_kernel: 1000 # Fresh component convolution kernels and boundary corrections
   selection:
     method: stouffer_q # Descriptive combination of existing member q-values; NOT component FDR
     min_support: 10 # Group all candidates first, then select at least this many distinct seeds

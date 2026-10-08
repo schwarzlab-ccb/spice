@@ -695,6 +695,8 @@ def combine_loci(
         final_events_df=processed_events
     )
     
+    from spice.component_model import tag_cohort
+    tag_cohort(config, loci_df)
     from spice.cohort_model import tag_loci, check_scoring_models
     tag_loci(config, loci_results_dir, list(all_data_per_length_scale), loci_df, processed_events)
     if calculate_p_value and permutation_null is not None:

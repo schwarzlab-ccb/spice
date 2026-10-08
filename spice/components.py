@@ -158,8 +158,8 @@ def digest(path):
     return value.hexdigest()
 
 
-def run_components(config, seed):
-    """Consume YAML-configured scored tables and saved reference models; write native outputs."""
+def run_components(config, seed, chrom=None):
+    """Cluster independent seed tables, then fit using a fresh event-derived or saved model."""
     validate_config(config['loci_detection'])
     settings = config['components']
     if (not config.get('name') or config['name'] in ('.', '..')
@@ -184,16 +184,22 @@ def run_components(config, seed):
     if len(set(paths.values())) != len(paths):
         raise ValueError('Each seed must supply a distinct locus table')
     frames = {s: pd.read_csv(p, sep='\t', index_col=0, float_precision='round_trip') for s, p in paths.items()}
+    from spice.component_model import validate_seed_cohorts, prepare_component_model
+    cohort_validation = validate_seed_cohorts(frames, config)
+    if chrom is not None:
+        if not any(frame.chrom.eq(chrom).any() for frame in frames.values()):
+            raise ValueError(f'No seed peaks on requested chromosome: {chrom}')
+        frames = {s: frame[frame.chrom == chrom].copy() for s, frame in frames.items()}
     groups, filtered, members, discarded, grouping = group_components(
         frames, settings['max_member_spans_mb'], settings['scale_fitness_fraction'],
         selection['min_support'], selection['threshold'])
     shared = config['input_files'].get('cohort_model_dir')
-    if not shared and settings['reference_seed'] not in frames:
-        raise ValueError('reference_seed must be present in component_loci')
     iterations = settings['refit_iterations']
     if isinstance(iterations, bool) or not isinstance(iterations, int) or iterations < 1:
         raise ValueError('refit_iterations must be a positive integer')
     model_identity = None
+    fresh = not shared and not config['input_files'].get('component_model_dir')
+    model = None
     if shared:
         if config['input_files'].get('component_model_dir'):
             raise ValueError('Choose cohort_model_dir or component_model_dir, not both')
@@ -203,12 +209,12 @@ def run_components(config, seed):
         if any(table_model_id(frame) != model_identity for frame in frames.values() if len(frame)):
             raise ValueError('Component seed tables must come from the supplied shared cohort model')
         model = model_root / 'report'
-    else:
+    elif not fresh:
         model = resolve(config['input_files'].get('component_model_dir'))
     chroms = sorted({c for frame in frames.values() for c in frame.chrom})
     if not chroms:
-        raise ValueError('No chromosomes in seed tables; cannot infer reference model scope')
-    model_paths = {c: model / 'data_per_length_scale' / f'{c}.pickle' for c in chroms}
+        raise ValueError('No chromosomes in seed tables; cannot infer component model scope')
+    model_paths = {} if fresh else {c: model / 'data_per_length_scale' / f'{c}.pickle' for c in chroms}
     if shared:
         for chrom in chroms:
             checked_file(model_root, manifest, f'report/data_per_length_scale/{chrom}.pickle')
@@ -219,7 +225,7 @@ def run_components(config, seed):
     if output.exists():
         raise ValueError(f'Use a new name/results directory; component output already exists: {output}')
     hashes = {str(p): digest(p) for p in list(paths.values()) + list(model_paths.values())}
-    for key in ('centromeres_observed', 'telomeres_observed'):
+    for key in ('final_events', 'plateaus', 'centromeres_observed', 'telomeres_observed'):
         if config['input_files'].get(key):
             path = resolve(config['input_files'][key])
             hashes[str(path)] = digest(path)
@@ -227,13 +233,23 @@ def run_components(config, seed):
     (output / 'config.yaml').write_text(yaml.safe_dump(config, sort_keys=False))
     members.to_csv(output / 'component_members.tsv', sep='\t', index=False)
     discarded.to_csv(output / 'discarded_loci.tsv', sep='\t', index=False)
-    audit = dict(status='running', input_sha256=hashes, reference_seed=None if shared else settings['reference_seed'],
-                 cohort_model_id=model_identity,
+    audit = dict(status='running', input_sha256=hashes, reference_seed=None,
+                 cohort_model_id=model_identity, cohort_validation=cohort_validation,
+                 model_source='events' if fresh else ('shared_legacy' if shared else 'saved'),
+                 component_model_seed=settings['model_seed'] if fresh else None,
                  grouping=grouping, fits={},
                  source_sha256={name: digest(Path(__file__).parent/name) for name in
                      ['components.py', '_component_clustering.py', 'tsg_og/detection.py', 'tsg_og/simulation.py']})
     (output / 'audit.json').write_text(json.dumps(audit, indent=2) + '\n')
     try:
+        if fresh:
+            model = output / 'component_model'
+            manifest = prepare_component_model(config, chroms, model)
+            model_paths = {c: model / 'data_per_length_scale' / f'{c}.pickle' for c in chroms}
+            audit['cohort_model_id'] = manifest['model_id']
+            audit['cohort_id'] = manifest['cohort_id']
+            hashes.update({str(p): digest(p) for p in model_paths.values()})
+            (output / 'audit.json').write_text(json.dumps(audit, indent=2) + '\n')
         results = {'all': [], 'filtered': []}
         for chrom, path in model_paths.items():
             with path.open('rb') as handle:

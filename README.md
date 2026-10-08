@@ -572,6 +572,7 @@ sets. YAML configures seed count, reference model, selection method/support/scor
 threshold, clustering spans and optimization budget. See
 [component configuration and outputs](doc/components.md).
 
-Use [a shared cohort model](doc/cohort_model.md) to remove the reference-seed
-model choice. Build it once with `spice cohort_model`, then supply its path to
-all detection, null and component configurations.
+For independent detections, the [component command](doc/components.md) now builds
+a fresh event-derived model after clustering; no reference seed is needed.
+The optional [shared cohort model](doc/cohort_model.md) is an earlier experiment
+that also shares preprocessing between detections; it is separate from this workflow.

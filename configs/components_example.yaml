@@ -7,8 +7,10 @@ directories:
   log_dir: logs
 params:
   assembly: hg19 # HMF: hg38; must match the saved model and observed bounds
-  seed: 9 # Reinitialized for each chromosome/set, matching the pipeline refit
+  seed: 9 # Component optimization RNG; independent of model preparation
 input_files:
+  final_events: /path/to/cohort/final_events.tsv
+  plateaus: /path/to/cohort/plateaus.tsv
   centromeres_observed: /path/to/cohort/observed/centromeres_observed.tsv
   telomeres_observed: /path/to/cohort/observed/telomeres_observed.tsv
   component_loci: # Native indexed, scored, UNFILTERED tables from the same cohort/shared null
@@ -22,12 +24,13 @@ input_files:
     7: seeds/seed_7/final_loci_detection_unfiltered.tsv
     8: seeds/seed_8/final_loci_detection_unfiltered.tsv
     9: seeds/seed_9/final_loci_detection_unfiltered.tsv
-  component_model_dir: reference_seed_9 # Contains data_per_length_scale/<chrom>.pickle
-# Use the seed-9 model with its component signal bounds already bootstrapped at 1000.
-# This command consumes saved signals/bounds; it does not regenerate bootstrap samples.
+# Omit component_model_dir and cohort_model_dir to build a fresh component model.
+# Detection seeds use independent preprocessing; no model is selected from those seeds.
 components:
   n_seeds: 10
-  reference_seed: 9
+  model_seed: 0
+  N_bootstrap: 1000
+  N_kernel: 1000
   selection:
     method: stouffer_q
     min_support: 10

@@ -1,4 +1,9 @@
-# Shared cohort model
+# Shared cohort model — optional earlier experiment
+
+For the current independent-seed workflow, use [components](components.md): each
+detection prepares its own model, and the component step builds a fresh model
+from the events after clustering. The mode below instead shares preprocessing
+between detections and is retained for reproducing the earlier experiment.
 
 `spice cohort_model --config cohort.yaml` prepares the stochastic preprocessing
 once, before detection. Every detection seed and the component refit can then use
