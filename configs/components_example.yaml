@@ -1,12 +1,12 @@
 # Run: spice components --config configs/components_example.yaml
-# All input paths below are relative to directories.base_dir (or may be absolute).
+# final_events must be absolute; other input paths may be absolute or relative to base_dir.
 name: cohort_components
 directories:
   base_dir: /path/to/cohort
   results_dir: results
   log_dir: logs
 params:
-  assembly: hg19 # HMF: hg38; must match the saved model and observed bounds
+  assembly: hg19 # HMF: hg38; must match the events and observed bounds
   seed: 9 # Component optimization RNG; independent of model preparation
 input_files:
   final_events: /path/to/cohort/final_events.tsv

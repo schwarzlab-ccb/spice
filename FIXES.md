@@ -1,4 +1,4 @@
-# Production fixes (2026-10-07)
+# Production fixes (updated 2026-10-08)
 
 Baseline: upstream main `ef416ce`. This branch now supports only the validated
 `combined_fitness` (A+B) statistic, `zpool_chrom` calibration and `rotate` null.
@@ -40,8 +40,8 @@ detection/pruning, component scale assignment and reporting; they are not an
 alternative p-value method.
 
 Independent-scale/any-scale scoring and bridge-preserving geometry remain on
-historical branches, outside this production implementation. Seed clustering and
-Stouffer member-q aggregation belong to the pipeline, not native SPICE.
+historical branches, outside this production implementation. Native component
+grouping and Stouffer member-q selection were integrated on 2026-10-08, as below.
 
 ## Frozen pipeline settings
 
@@ -59,3 +59,36 @@ See pipeline `docs/FINAL_PRODUCTION.md` and its finalization receipts for checks
 
 Native suite: 199 passed, 4 skipped (optional PCAWG integration data absent).
 Use the SPICE conda bin directory on PATH for subprocess CLI tests.
+
+## Native components integrated on 2026-10-08
+
+The `components` implementation through `49be88f` was fast-forwarded into `fixes`
+without changing its validated scientific code. Run:
+
+```bash
+spice components --config configs/components_example.yaml
+```
+
+The default workflow keeps peak-detection seeds independent. It groups their
+scored tables, selects components, prepares fresh kernels/corrections and signal
+bounds from the cohort events, then jointly fits the all and filtered sets
+separately. No reference detection seed is needed. YAML defaults use ten seeds,
+ten supports, Stouffer member-q score <0.05, original 1/2/4/8 Mb spans, model seed
+0, 1000 kernel/bootstrap samples and 100000 component optimization steps.
+
+The optional `cohort_model` command from the earlier shared-detection experiment
+is retained as implemented, but is not part of this default workflow. Independent
+detection/null configurations omit `cohort_model_dir`; standard component configs
+omit both model-directory inputs. Explicit saved-model inputs remain useful for
+historical reproduction and controlled comparisons.
+
+Whole-genome TCGA validation preserved exact membership and all 1289 / selected
+422 component counts, with no zero-fitness components. Selected CI coverage changed
+from 80.282% to 80.408%; on unchanged old bounds it became 80.367%. Native tests:
+240 passed, 4 skipped. See [usage](doc/components.md) and the
+[full validation report](doc/independent_component_model_validation.md).
+
+This integrates the command into native SPICE only. The external pipeline's
+workflow and production lock still target their previous implementation and need
+a separate migration; its locked preparers reject this newer native revision.
+No existing results were replaced and nothing was pushed.

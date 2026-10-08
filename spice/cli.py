@@ -1364,8 +1364,10 @@ Examples:
     parser_components = subparsers.add_parser(
         'components', parents=[common_parser],
         help='Group scored seed loci, select components and jointly fit their fitness',
-        description='Read unfiltered seed tables and a saved reference model from YAML; '
-                    'write all/filtered components with separate fixed-position joint fits.')
+        description='Read independent unfiltered seed tables and cohort events from YAML; '
+                    'build a fresh component model and fit all/filtered sets separately. '
+                    'No reference seed is required. components.model_seed controls model '
+                    'preparation; --seed controls component optimization.')
     parser_components.add_argument('--chrom', default=None, help='Group and refit one chromosome (use distinct output names for scatter jobs)')
     parser_components.set_defaults(func=main_components)
     

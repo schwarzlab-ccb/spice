@@ -568,8 +568,8 @@ enumeration as `combine_loci`; incompatible leftovers are rejected before use.
 
 Run `spice components --config configs/components_example.yaml` to group scored,
 unfiltered seed loci and jointly fit the all-component and filtered-component
-sets. YAML configures seed count, reference model, selection method/support/score
-threshold, clustering spans and optimization budget. See
+sets. YAML configures seed count, fresh component-model preparation, selection
+method/support/score threshold, clustering spans and optimization budget. See
 [component configuration and outputs](doc/components.md).
 
 For independent detections, the [component command](doc/components.md) now builds
