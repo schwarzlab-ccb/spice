@@ -1,5 +1,7 @@
 # SPICE: Selection Patterns In somatic Copy-number Events
 
+![](doc/logo_banner.png)
+
 **SPICE**, Selection Patterns In somatic Copy-number Events, is a framework that
 1) infers discrete copy-number events from allele-specific profiles,
 2) detects loci of selection in the copy-number data and 
