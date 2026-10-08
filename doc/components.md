@@ -48,6 +48,15 @@ The command evaluates the chromosomes represented in the seed tables, including
 chromosomes with no selected components. Completely empty seed tables cannot
 establish a chromosome scope by themselves. A missing required model is an error.
 
+## Shared model instead of a reference seed
+
+For new shared-model runs, supply `input_files.cohort_model_dir` and omit
+`component_model_dir`. The command uses the shared artifact's report model
+(1000-sample bounds by default), ignores `reference_seed`, and checks that every
+nonempty seed table carries the matching model identity. Build that model before
+rerunning the detections/null; previous seed-specific tables are not interchangeable.
+See [shared cohort model preparation](cohort_model.md).
+
 ## Grouping and selection
 
 Grouping matches chromosome/direction and allows one member per seed. It assigns

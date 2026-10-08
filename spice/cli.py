@@ -540,7 +540,7 @@ def _run_permutation_unit(raw_events, loci_params, loci_results_dir, chroms, see
             overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
             name=config['name'],
             N_loci=loci_params['N_loci'], N_loci_spacing=loci_params.get('N_loci_spacing'),
-            loci_results_dir=unit_dir,
+            loci_results_dir=unit_dir, permutation_model=True,
             skip_up_down=loci_params['skip_up_down'], N_bootstrap=loci_params['N_bootstrap'],
             N_kernel=loci_params['N_kernel'], use_original_rank=loci_params['use_original_rank'],
             detection_N_iterations_base=loci_params['detection_N_iterations_base'],
@@ -733,7 +733,7 @@ def _detect_one(run_loci_detection_per_chrom, processed, chrom, steps, loci_para
         final_events_df=processed, cur_chrom=chrom, which=steps, overwrite=args.overwrite,
         overwrite_preprocessing=(loci_params['overwrite_preprocessing'] and args.overwrite),
         name=config['name'], N_loci=loci_params['N_loci'],
-        N_loci_spacing=loci_params.get('N_loci_spacing'), loci_results_dir=out_dir,
+        N_loci_spacing=loci_params.get('N_loci_spacing'), loci_results_dir=out_dir, permutation_model=True,
         skip_up_down=loci_params['skip_up_down'], N_bootstrap=loci_params['N_bootstrap'],
         N_kernel=loci_params['N_kernel'], use_original_rank=loci_params['use_original_rank'],
         detection_N_iterations_base=loci_params['detection_N_iterations_base'],
@@ -1066,6 +1066,20 @@ def main_loci_assignment(args):
     logger.info('Loci assignment pipeline completed.')
 
 
+def main_cohort_model(args):
+    """Prepare common cohort preprocessing before any seed detections."""
+    spice.load_config(args.config_path)
+    from spice.logging import configure_logging, get_logger
+    from spice.cohort_model import build_model
+    configure_logging(log_mode=args.log, log_dir=spice.config['directories']['log_dir'],
+                      config_name=spice.config['name'],
+                      level='DEBUG' if args.debug else spice.config['params'].get('logging_level', 'INFO'))
+    if args.seed is not None:
+        raise ValueError('Use cohort_model.seed in YAML; --seed controls detection/refit RNG only')
+    output = build_model(spice.config, [args.chrom] if args.chrom else None)
+    get_logger('SPICE', spice_prefix=False).info(f'Shared cohort model saved to {output}')
+
+
 def main_components(args):
     """Group scored seed loci and fit all/filtered components from YAML inputs."""
     spice.load_config(args.config_path)
@@ -1340,6 +1354,12 @@ Examples:
         help='Run new and overwrite existing data'
     )
     parser_assign.set_defaults(func=main_loci_assignment)
+
+    parser_model = subparsers.add_parser(
+        'cohort_model', parents=[common_parser],
+        help='Prepare a seed-independent cohort model for detection and components')
+    parser_model.add_argument('--chrom', default=None, help='Build a single chromosome for a pilot')
+    parser_model.set_defaults(func=main_cohort_model)
 
     parser_components = subparsers.add_parser(
         'components', parents=[common_parser],

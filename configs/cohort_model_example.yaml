@@ -1,0 +1,38 @@
+# Build once: spice cohort_model --config configs/cohort_model_example.yaml
+# For seed detections, copy this config, change name/params.seed for each run,
+# and retain input_files.cohort_model_dir. See doc/cohort_model.md for null/components.
+name: cohort
+directories:
+  base_dir: /path/to/cohort
+  results_dir: results
+  log_dir: logs
+params:
+  assembly: hg19
+  seed: 0
+input_files:
+  final_events: /path/to/cohort/final_events.tsv
+  centromeres_observed: /path/to/cohort/centromeres_observed.tsv
+  telomeres_observed: /path/to/cohort/telomeres_observed.tsv
+  plateaus: /path/to/cohort/plateaus.tsv
+  cohort_model_dir: results/cohort/cohort_model
+cohort_model:
+  seed: 0
+  N_bootstrap_report: 1000
+loci_detection:
+  loci_steps: full
+  N_loci_spacing: 1000000
+  N_bootstrap: 100
+  N_bootstrap_for_widths: 100
+  N_kernel: 1000
+  th_locus_mean_fitness: 0
+  p_values_K: 16
+  p_values_method: combined_fitness
+  p_values_strategy: zpool_chrom
+  p_values_permute_mode: rotate
+components:
+  n_seeds: 10
+  selection:
+    method: stouffer_q
+    min_support: 10
+    threshold: 0.05
+  refit_iterations: 100000

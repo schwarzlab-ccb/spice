@@ -148,11 +148,12 @@ One thing falls outside the seed: **Wall-clock limits.** `params.time_limit_all_
 
 ## 2. Usage Overview
 
-SPICE has six main modes:
+SPICE has seven main modes:
 - **event_inference**: Infer discrete copy-number events from allele-specific profiles
 - **loci_detection**: Detect recurrent copy-number loci across samples
 - **permute**: Build or pool the rotate permutation null used for locus scoring
 - **loci_assignment**: Fit cohort-level fitness at predefined locus positions
+- **cohort_model**: Prepare one common cohort model for every detection seed and component fit
 - **components**: Group scored loci across detection seeds, select components and jointly refit all/filtered sets
 - **plotting**: Generate visualizations of inferred events and detected loci
 
@@ -570,3 +571,7 @@ unfiltered seed loci and jointly fit the all-component and filtered-component
 sets. YAML configures seed count, reference model, selection method/support/score
 threshold, clustering spans and optimization budget. See
 [component configuration and outputs](doc/components.md).
+
+Use [a shared cohort model](doc/cohort_model.md) to remove the reference-seed
+model choice. Build it once with `spice cohort_model`, then supply its path to
+all detection, null and component configurations.

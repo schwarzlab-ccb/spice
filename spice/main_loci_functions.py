@@ -13,11 +13,10 @@ from spice.utils import open_pickle, save_pickle, CALC_NEW
 from spice.logging import log_debug, get_logger
 from spice.random_state import derive_seed, seed_task
 from spice.tsg_og.detection import (
-    collect_data_per_length_scale, detect_tsgs_ogs_for_all_length_scales, n_loci_from_spacing,
+    detect_tsgs_ogs_for_all_length_scales, n_loci_from_spacing,
     rank_loci, within_ci_fitness_filter,
     flip_up_down_assignment, final_optimization_step, limiting_fitness, infer_loci_widths, merge_overlapping_loci,
     calc_mse_loss, filter_loci, _optimize_selection_points, SelectionPoints)
-from spice.tsg_og.signal_bootstrap import bootstrap_sampling_of_signal
 from spice.tsg_og.simulation import copy_list_of_selection_points, convolution_simulation_per_ls
 from spice.loci_preprocessing import process_final_events_for_loci_routines
 from spice.tsg_og.loci import (
@@ -87,7 +86,8 @@ def run_loci_detection_per_chrom(
     final_limiting_N_iterations_optim=10_000,
     N_bootstrap_for_widths=200,
     th_locus_prominence=5,
-    th_locus_mean_fitness=1
+    th_locus_mean_fitness=1,
+    permutation_model=False,
 ):
     """
     Run the loci detection pipeline for a given chromosome.
@@ -210,21 +210,10 @@ def run_loci_detection_per_chrom(
     # Create filename template
     filenames = {w: f'{w}.pickle' for w in which_options + ['final_selection_points']}
 
-    # Calculate bootstrap signals before loading data per length scale
-    logger.info(f'Calculating bootstrap signals for {cur_chrom}')
-    bootstrap_sampling_of_signal(
-        cur_chrom=cur_chrom,
-        final_events_df=final_events_df,
-        N_bootstrap=N_bootstrap,
-        calc_new_force_new=overwrite_preprocessing,
-        calc_new_filename=os.path.join(
-            loci_results_dir, 'signal_bootstrap', f'{cur_chrom}_N_{N_bootstrap}.pickle'))
-    
-    # Load relevant data
-    data_per_length_scale = collect_data_per_length_scale(
-        final_events_df, cur_chrom, N_bootstrap=N_bootstrap, N_kernel=N_kernel, loci_results_dir=loci_results_dir,
-        calc_new_force_new=overwrite_preprocessing,
-        calc_new_filename=os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle'))
+    from spice.cohort_model import detection_data
+    data_per_length_scale = detection_data(
+        config, final_events_df, cur_chrom, loci_results_dir, N_bootstrap, N_kernel,
+        overwrite=overwrite_preprocessing, permutation=permutation_model)
 
     validate_data(data_per_length_scale)
 
@@ -706,6 +695,11 @@ def combine_loci(
         final_events_df=processed_events
     )
     
+    from spice.cohort_model import tag_loci, check_scoring_models
+    tag_loci(config, loci_results_dir, list(all_data_per_length_scale), loci_df, processed_events)
+    if calculate_p_value and permutation_null is not None:
+        check_scoring_models(loci_df, permutation_null)
+
     if calculate_p_value:
         from spice.length_scales import LENGTH_SCALE_NAMES
         if permutation_null is None or not len(permutation_null):
@@ -861,20 +855,11 @@ def run_loci_assignment_per_chrom(
     os.makedirs(output_dir, exist_ok=True)
     
     logger.info(f'Calculating bootstrap signals for {cur_chrom}')
-    bootstrap_sampling_of_signal(
-        cur_chrom=cur_chrom,
-        final_events_df=final_events_df,
-        N_bootstrap=N_bootstrap,
-        calc_new_force_new=overwrite_preprocessing,
-        calc_new_filename=os.path.join(
-            loci_results_dir, 'signal_bootstrap', f'{cur_chrom}_N_{N_bootstrap}.pickle'))
+    from spice.cohort_model import detection_data
+    data_per_length_scale = detection_data(
+        config, final_events_df, cur_chrom, loci_results_dir, N_bootstrap, N_kernel,
+        overwrite=overwrite_preprocessing)
 
-    # Load data per length scale
-    data_per_length_scale = collect_data_per_length_scale(
-        final_events_df, cur_chrom, N_bootstrap=N_bootstrap, N_kernel=N_kernel,
-        loci_results_dir=loci_results_dir,
-        calc_new_force_new=overwrite_preprocessing,
-        calc_new_filename=os.path.join(loci_results_dir, 'data_per_length_scale', f'{cur_chrom}.pickle'))
     
     # Filter reference_loci for this chromosome
     chrom_loci = reference_loci_df.query('chrom == @cur_chrom').copy()

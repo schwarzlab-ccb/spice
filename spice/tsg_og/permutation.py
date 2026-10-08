@@ -236,7 +236,9 @@ def null_from_loci(loci_frames, method='combined_fitness'):
     records the original chromosome arm for auditing the rotate null. Calibration uses
     chromosome/direction strata. Signed fitness is retained for scoring verification.
     """
+    from spice.cohort_model import table_model_id, MODEL_COLUMN
     parts = []
+    model_ids = set()
     modes = set()
     untagged = False
     bounds = arm_bounds()
@@ -249,6 +251,7 @@ def null_from_loci(loci_frames, method='combined_fitness'):
             modes.update(df.permutation_mode.unique())
         else:
             untagged = True
+        model_ids.add(table_model_id(df))
         validate_null_mode(df, 'rotate')
         per_ls = scoring_per_ls(df, method)
         parts.append(pd.DataFrame({
@@ -264,7 +267,12 @@ def null_from_loci(loci_frames, method='combined_fitness'):
         raise ValueError('no null loci: every permutation produced an empty loci table')
     if len(modes) > 1 or (modes and untagged):
         raise ValueError('Cannot pool mixed or partly untagged permutation modes')
+    if len(model_ids) != 1:
+        raise ValueError('Cannot pool mixed shared/legacy cohort models')
     result = pd.concat(parts, ignore_index=True)
+    model_id = next(iter(model_ids))
+    if model_id is not None:
+        result[MODEL_COLUMN] = model_id
     if modes:
         result['permutation_mode'] = next(iter(modes))
     return result
@@ -290,6 +298,9 @@ def permutation_p(loci_df, null_df, strategy='zpool_chrom', column='stat', metho
     """
     if strategy not in STRATEGIES:
         raise ValueError(f'strategy must be one of {STRATEGIES}, got {strategy!r}')
+    from spice.cohort_model import check_scoring_models
+    if len(loci_df):
+        check_scoring_models(loci_df, null_df)
     validate_null_scoring(null_df, method)
     validate_null_mode(null_df, 'rotate')
     if not len(loci_df):

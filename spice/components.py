@@ -187,16 +187,31 @@ def run_components(config, seed):
     groups, filtered, members, discarded, grouping = group_components(
         frames, settings['max_member_spans_mb'], settings['scale_fitness_fraction'],
         selection['min_support'], selection['threshold'])
-    if settings['reference_seed'] not in frames:
+    shared = config['input_files'].get('cohort_model_dir')
+    if not shared and settings['reference_seed'] not in frames:
         raise ValueError('reference_seed must be present in component_loci')
     iterations = settings['refit_iterations']
     if isinstance(iterations, bool) or not isinstance(iterations, int) or iterations < 1:
         raise ValueError('refit_iterations must be a positive integer')
-    model = resolve(config['input_files'].get('component_model_dir'))
+    model_identity = None
+    if shared:
+        if config['input_files'].get('component_model_dir'):
+            raise ValueError('Choose cohort_model_dir or component_model_dir, not both')
+        from spice.cohort_model import read_model, checked_file, table_model_id
+        model_root, manifest = read_model(config)
+        model_identity = manifest['model_id']
+        if any(table_model_id(frame) != model_identity for frame in frames.values() if len(frame)):
+            raise ValueError('Component seed tables must come from the supplied shared cohort model')
+        model = model_root / 'report'
+    else:
+        model = resolve(config['input_files'].get('component_model_dir'))
     chroms = sorted({c for frame in frames.values() for c in frame.chrom})
     if not chroms:
         raise ValueError('No chromosomes in seed tables; cannot infer reference model scope')
     model_paths = {c: model / 'data_per_length_scale' / f'{c}.pickle' for c in chroms}
+    if shared:
+        for chrom in chroms:
+            checked_file(model_root, manifest, f'report/data_per_length_scale/{chrom}.pickle')
     for path in model_paths.values():
         if not path.is_file():
             raise ValueError(f'Missing component reference model: {path}')
@@ -212,7 +227,8 @@ def run_components(config, seed):
     (output / 'config.yaml').write_text(yaml.safe_dump(config, sort_keys=False))
     members.to_csv(output / 'component_members.tsv', sep='\t', index=False)
     discarded.to_csv(output / 'discarded_loci.tsv', sep='\t', index=False)
-    audit = dict(status='running', input_sha256=hashes, reference_seed=settings['reference_seed'],
+    audit = dict(status='running', input_sha256=hashes, reference_seed=None if shared else settings['reference_seed'],
+                 cohort_model_id=model_identity,
                  grouping=grouping, fits={},
                  source_sha256={name: digest(Path(__file__).parent/name) for name in
                      ['components.py', '_component_clustering.py', 'tsg_og/detection.py', 'tsg_og/simulation.py']})
