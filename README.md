@@ -148,10 +148,12 @@ One thing falls outside the seed: **Wall-clock limits.** `params.time_limit_all_
 
 ## 2. Usage Overview
 
-SPICE has four main modes:
+SPICE has six main modes:
 - **event_inference**: Infer discrete copy-number events from allele-specific profiles
 - **loci_detection**: Detect recurrent copy-number loci across samples
-- **loci_assignment**: Assign loci to samples based on detected loci patterns
+- **permute**: Build or pool the rotate permutation null used for locus scoring
+- **loci_assignment**: Fit cohort-level fitness at predefined locus positions
+- **components**: Group scored loci across detection seeds, select components and jointly refit all/filtered sets
 - **plotting**: Generate visualizations of inferred events and detected loci
 
 
@@ -560,3 +562,11 @@ Hybrid permutation combination validates mode markers for every chromosome cache
 that `combine_loci` will load, including chromosomes absent from the current
 processed event frame. Pooling and inline combination share the same cache
 enumeration as `combine_loci`; incompatible leftovers are rejected before use.
+
+## Components across detection seeds
+
+Run `spice components --config configs/components_example.yaml` to group scored,
+unfiltered seed loci and jointly fit the all-component and filtered-component
+sets. YAML configures seed count, reference model, selection method/support/score
+threshold, clustering spans and optimization budget. See
+[component configuration and outputs](doc/components.md).

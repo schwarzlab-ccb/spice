@@ -87,3 +87,15 @@ loci_detection:
   remove_chrY: True # Remove chrY events from analysis
   drop_duplicates: True # Remove duplicate event entries
   use_observed_centromeres: True # Use empirically observed centromere positions
+
+components:
+  # Input tables/model are configured under input_files; see configs/components_example.yaml.
+  n_seeds: 10 # Must match the number of distinct entries in input_files.component_loci
+  reference_seed: 9 # Identity of the supplied saved model; params.seed controls refit RNG
+  selection:
+    method: stouffer_q # Descriptive combination of existing member q-values; NOT component FDR
+    min_support: 10 # Group all candidates first, then select at least this many distinct seeds
+    threshold: 0.05 # Strict score cutoff
+  max_member_spans_mb: {small: 1, mid1: 2, mid2: 4, large: 8}
+  scale_fitness_fraction: 0.25 # Shortest positive directional scale reaching this fraction of the maximum
+  refit_iterations: 100000 # One joint fixed-position optimization per chromosome and component set

@@ -1066,6 +1066,21 @@ def main_loci_assignment(args):
     logger.info('Loci assignment pipeline completed.')
 
 
+def main_components(args):
+    """Group scored seed loci and fit all/filtered components from YAML inputs."""
+    spice.load_config(args.config_path)
+    from spice.logging import configure_logging, get_logger
+    from spice.components import run_components
+    configure_logging(log_mode=args.log, log_dir=spice.config['directories']['log_dir'],
+                      config_name=spice.config.get('name', 'components'),
+                      level='DEBUG' if args.debug else spice.config['params'].get('logging_level', 'INFO'))
+    logger = get_logger('SPICE', spice_prefix=False)
+    _apply_seed(args, logger)
+    from spice.random_state import get_seed
+    output = run_components(spice.config, get_seed())
+    logger.info(f'Components saved to {output}')
+
+
 def main():
     """Main CLI entry point for SPICE."""
     parser = argparse.ArgumentParser(
@@ -1090,6 +1105,9 @@ Examples:
   
   # Loci assignment (fitness assignment to predefined loci)
   spice loci_assignment --config <path/to/config>
+
+  # Components from scored detection seeds and a saved reference model
+  spice components --config configs/components_example.yaml
     """
     
     # Create subparsers for different modes
@@ -1322,6 +1340,13 @@ Examples:
         help='Run new and overwrite existing data'
     )
     parser_assign.set_defaults(func=main_loci_assignment)
+
+    parser_components = subparsers.add_parser(
+        'components', parents=[common_parser],
+        help='Group scored seed loci, select components and jointly fit their fitness',
+        description='Read unfiltered seed tables and a saved reference model from YAML; '
+                    'write all/filtered components with separate fixed-position joint fits.')
+    parser_components.set_defaults(func=main_components)
     
     # Parse arguments and call the appropriate function
     args = parser.parse_args()

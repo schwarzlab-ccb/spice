@@ -1,0 +1,37 @@
+# Run: spice components --config configs/components_example.yaml
+# All input paths below are relative to directories.base_dir (or may be absolute).
+name: cohort_components
+directories:
+  base_dir: /path/to/cohort
+  results_dir: results
+  log_dir: logs
+params:
+  assembly: hg19 # HMF: hg38; must match the saved model and observed bounds
+  seed: 9 # Reinitialized for each chromosome/set, matching the pipeline refit
+input_files:
+  centromeres_observed: /path/to/cohort/observed/centromeres_observed.tsv
+  telomeres_observed: /path/to/cohort/observed/telomeres_observed.tsv
+  component_loci: # Native indexed, scored, UNFILTERED tables from the same cohort/shared null
+    0: seeds/seed_0/final_loci_detection_unfiltered.tsv
+    1: seeds/seed_1/final_loci_detection_unfiltered.tsv
+    2: seeds/seed_2/final_loci_detection_unfiltered.tsv
+    3: seeds/seed_3/final_loci_detection_unfiltered.tsv
+    4: seeds/seed_4/final_loci_detection_unfiltered.tsv
+    5: seeds/seed_5/final_loci_detection_unfiltered.tsv
+    6: seeds/seed_6/final_loci_detection_unfiltered.tsv
+    7: seeds/seed_7/final_loci_detection_unfiltered.tsv
+    8: seeds/seed_8/final_loci_detection_unfiltered.tsv
+    9: seeds/seed_9/final_loci_detection_unfiltered.tsv
+  component_model_dir: reference_seed_9 # Contains data_per_length_scale/<chrom>.pickle
+# Use the seed-9 model with its component signal bounds already bootstrapped at 1000.
+# This command consumes saved signals/bounds; it does not regenerate bootstrap samples.
+components:
+  n_seeds: 10
+  reference_seed: 9
+  selection:
+    method: stouffer_q
+    min_support: 10
+    threshold: 0.05
+  max_member_spans_mb: {small: 1, mid1: 2, mid2: 4, large: 8}
+  scale_fitness_fraction: 0.25
+  refit_iterations: 100000
