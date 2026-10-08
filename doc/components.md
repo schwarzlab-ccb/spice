@@ -15,6 +15,9 @@ components, prepares their model, and fits the all/filtered sets separately.
 It does not run event inference, schedule seed detections, regenerate the null,
 recompute member p/q values or build a browser.
 
+[Whole-genome TCGA validation](independent_component_model_validation.md) preserves
+the 1289 all / 422 selected components and measures the CI changes after refitting.
+
 ## Configuration
 
 [The example YAML](../configs/components_example.yaml) supplies the cohort inputs,

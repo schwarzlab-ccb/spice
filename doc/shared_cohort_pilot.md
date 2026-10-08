@@ -3,6 +3,10 @@
 Implementation: native SPICE `components` branch, commit `f74ede5`.
 The production lock and the `fixes` branch were not changed.
 
+This earlier experiment shared preprocessing across detections. The intended
+workflow now keeps detections independent and prepares a model only for component
+refitting; see [the whole-genome validation](independent_component_model_validation.md).
+
 ## Scope
 
 Recovered TCGA inferred events and cohort-specific hg19 observed bounds were used
