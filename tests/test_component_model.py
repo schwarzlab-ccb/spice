@@ -99,5 +99,22 @@ def test_invalid_model_settings(fresh_config, tmp_path, key, value):
 
 def test_chromosome_scope_rejected_before_model_build(fresh_config):
     cfg, calls = fresh_config
-    with pytest.raises(ValueError, match='No seed peaks'): run_components(cfg, 9, chrom='chr22')
+    with pytest.raises(ValueError, match='absent from processed cohort events'): run_components(cfg, 9, chrom='chr22')
     assert not calls
+
+
+def test_empty_requested_chromosome_still_has_model_and_ci(fresh_config):
+    cfg, calls = fresh_config
+    for path in cfg['input_files']['component_loci'].values():
+        p = cm.resolve(cfg, path)
+        frame = pd.read_csv(p, sep='\t', index_col=0).iloc[:0]
+        frame.to_csv(p, sep='\t')
+    output = run_components(cfg, 9, chrom='chr21')
+    audit = json.loads((output/'audit.json').read_text())
+    assert calls == [('chr21', 123, 7, 11)]
+    assert audit['status'] == 'complete'
+    for label in ['all', 'filtered']:
+        assert pd.read_csv(output/f'components_{label}.tsv', sep='\t').empty
+        assert audit['fits'][label]['chr21']['components'] == 0
+        assert np.isfinite(audit['fits'][label]['chr21']['within_ci'])
+        assert (output/'fits'/label/'chr21/fitted_signal.npz').is_file()

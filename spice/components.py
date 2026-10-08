@@ -43,7 +43,7 @@ def group_components(frames, spans_mb, scale_fitness_fraction=.25, min_support=1
         required = ['chrom', 'type', 'pos', 'start', 'end', 'p_value', 'q_value'] + FITNESS
         if not set(required) <= set(frame.columns):
             raise ValueError(f'Seed {seed}: missing locus columns: {sorted(set(required)-set(frame.columns))}')
-        if (not np.isfinite(frame[['p_value', 'q_value']]).all().all()
+        if (not np.isfinite(frame[['p_value', 'q_value']].to_numpy(dtype=float)).all()
                 or not frame[['p_value', 'q_value']].apply(lambda x: x.between(0, 1).all()).all()):
             raise ValueError(f'Seed {seed}: invalid p/q values')
         if 'p_values_method' not in frame or not frame.p_values_method.eq('combined_fitness').all():
@@ -57,7 +57,8 @@ def group_components(frames, spans_mb, scale_fitness_fraction=.25, min_support=1
     nodes['p_value'] = [frames[r.seed].loc[r.peak_row, 'p_value'] for r in nodes.itertuples()]
     members = nodes[nodes.retained].copy()
     groups = tables['graph_components'].copy()
-    score = members.groupby('component_id').q_value.apply(stouffer_q)
+    score = (members.groupby('component_id').q_value.apply(stouffer_q)
+             if len(members) else pd.Series(dtype=float))
     groups['stouffer_q_score'] = groups.component_id.map(score).astype(float)
     groups['selected'] = (groups.n_seeds >= min_support) & (groups.stouffer_q_score < score_threshold)
     groups['pos'] = groups.mean_pos_bp
@@ -184,11 +185,14 @@ def run_components(config, seed, chrom=None):
     if len(set(paths.values())) != len(paths):
         raise ValueError('Each seed must supply a distinct locus table')
     frames = {s: pd.read_csv(p, sep='\t', index_col=0, float_precision='round_trip') for s, p in paths.items()}
+    # Header-only TSVs otherwise infer object dtype for numeric fields.
+    for frame in frames.values():
+        if frame.empty:
+            for column in ['pos', 'start', 'end', 'p_value', 'q_value'] + FITNESS:
+                if column in frame: frame[column] = frame[column].astype(float)
     from spice.component_model import validate_seed_cohorts, prepare_component_model
     cohort_validation = validate_seed_cohorts(frames, config)
     if chrom is not None:
-        if not any(frame.chrom.eq(chrom).any() for frame in frames.values()):
-            raise ValueError(f'No seed peaks on requested chromosome: {chrom}')
         frames = {s: frame[frame.chrom == chrom].copy() for s, frame in frames.items()}
     groups, filtered, members, discarded, grouping = group_components(
         frames, settings['max_member_spans_mb'], settings['scale_fitness_fraction'],
@@ -211,7 +215,7 @@ def run_components(config, seed, chrom=None):
         model = model_root / 'report'
     elif not fresh:
         model = resolve(config['input_files'].get('component_model_dir'))
-    chroms = sorted({c for frame in frames.values() for c in frame.chrom})
+    chroms = [chrom] if chrom is not None else sorted({c for frame in frames.values() for c in frame.chrom})
     if not chroms:
         raise ValueError('No chromosomes in seed tables; cannot infer component model scope')
     model_paths = {} if fresh else {c: model / 'data_per_length_scale' / f'{c}.pickle' for c in chroms}

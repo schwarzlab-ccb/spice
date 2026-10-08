@@ -122,7 +122,9 @@ Results are written under `directories.results_dir/<name>/components/`:
   non-centromere bins and includes zero-signal bins. `status: complete` marks success.
 
 Use a new name/results directory for every run. `--chrom chr21` restricts grouping
-and fitting to one chromosome while preserving original seed-row IDs. Separate
+and fitting to one chromosome while preserving original seed-row IDs. An explicitly
+requested chromosome with cohort events but no seed candidates still gets empty
+component tables, a zero fitted signal and CI coverage. Separate
 chromosome jobs need distinct output names. Their component IDs are local to each
 job; merge with unique IDs or map by member identities before publication.
 The external production pipeline/lock has not yet migrated to this native command.
