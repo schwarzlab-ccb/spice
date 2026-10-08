@@ -86,8 +86,10 @@ and the same counts/policy. It never copies the observed signals. Each permutati
 cache records its processed-event hash and role. Rotation and detection still use
 the null run's normal RNG; model preparation restores that RNG afterward.
 
-The shared model changes the detection procedure, so a null from the previous
-seed-specific procedure must be regenerated. A+B scoring, within-arm rotation,
+Shared-mode scoring requires a matching model identity. Build the null with
+the shared configuration; historical untagged nulls are not accepted without
+a separate compatibility audit. When the old null already used the same model
+seed and settings, its numerical results may be unchanged. A+B scoring, within-arm rotation,
 chromosome/direction standardization and BH are unchanged. Pooling and scoring
 reject mixed/missing model identities. Model tags verify model compatibility;
 they do not certify arbitrary external TSVs or every detection/selection setting.
@@ -96,3 +98,9 @@ Keep complete run configurations and provenance.
 Historical `component_model_dir` and per-seed preprocessing remain available for
 reproducing previous outputs when no `cohort_model_dir` is configured. Historical
 results are not relabeled as shared-model results.
+
+## Validation
+
+The [TCGA chr21 pilot](shared_cohort_pilot.md) exercised ten detections, sixteen
+permutations, scoring and repeated component refits. It records the results,
+regression checks and limits of the chromosome-only comparison.
