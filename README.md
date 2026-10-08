@@ -1,7 +1,5 @@
 # SPICE: Selection Patterns In somatic Copy-number Events
 
-![](doc/logo_banner.png)
-
 **SPICE**, Selection Patterns In somatic Copy-number Events, is a framework that
 1) infers discrete copy-number events from allele-specific profiles,
 2) detects loci of selection in the copy-number data and 
@@ -48,7 +46,7 @@ pip install scna-spice
 
 Clone the repository:
 ```bash
-git clone git@bitbucket.org:schwarzlab/spice.git
+git clone git@github.com:schwarzlab-ccb/spice.git
 cd spice
 ```
 
@@ -83,7 +81,7 @@ input_files:
    copynumber: data/example_data.tsv
 ```
 
-For other parameters that can be modified, see `default_config.yaml`.
+For other parameters that can be modified, see [the default configuration](spice/objects/default_config.yaml).
 
 ### 1.2 Relative vs absolute paths
 
@@ -93,11 +91,12 @@ For other parameters that can be modified, see `default_config.yaml`.
 
 ### 1.3 Reproducibility (`params.seed`)
 
-Every SPICE step is stochastic (MCMC over event orders, resimulated nulls, bootstrap resampling,
-randomised tie-breaks). All of it derives from a single base seed, `params.seed` (default 42),
+SPICE analysis uses stochastic steps (MCMC over event orders, resimulated nulls, bootstrap resampling,
+randomised tie-breaks). Detection and event inference derive their random streams from `params.seed` (default 42),
 overridable per command with `--seed`; the seed in use is written to the log at startup. Re-running
-the same command on the same input with the same seed reproduces the results; change the seed to get
-an independent replicate.
+the same command with identical inputs, settings and seed reproduces its random streams; change the seed to get
+an independent replicate. Component model preparation uses its own
+`components.model_seed`; component fitness optimization uses `params.seed`.
 
 The seed is threaded through parallel work as well, so results do not depend on `--cores`: each task
 (a sample, a chromosome, a bootstrap iteration, a resimulation) gets its own stream keyed on *what
@@ -120,8 +119,7 @@ once all units finish. `spice permute --config <config> --pool --overwrite` also
 recombination of existing per-chromosome results, without rerunning detection.
 
 Production supports only the `rotate` null and `combined_fitness` (A+B) with
-`zpool_chrom` calibration. Older shuffle and p-value options are rejected.
-See [FIXES.md](FIXES.md) for the retained changes and reproducibility settings.
+`zpool_chrom` calibration. These settings apply to observed loci and their permutation null.
 
 The CLI/config default is `loci_detection.N_bootstrap: 100` for the signal's
 2.5% and 97.5% bootstrap quantiles. This is a runtime/storage compromise; use
@@ -144,16 +142,15 @@ inputs, parameters, and seed, rebuilding a stage gives the same result whether p
 stages were computed, cached, or loaded during a resumed run. When changing the seed,
 inputs, or parameters, use a new run name/directory so earlier caches are not reused.
 
-One thing falls outside the seed: **Wall-clock limits.** `params.time_limit_all_solutions` / `time_limit_mcmc` (and CP-SAT's internal time limit) make the result depend on machine speed and load. Leave them unset for
+One thing falls outside the seed: **Wall-clock limits.** `params.time_limit_all_solutions` / `time_limit_mcmc` (and CP-SAT's internal time limit) make the result depend on machine speed and load. Record these limits alongside the seed when reproducing an event-inference run.
 
 ## 2. Usage Overview
 
-SPICE has seven main modes:
+The main analysis commands are:
 - **event_inference**: Infer discrete copy-number events from allele-specific profiles
 - **loci_detection**: Detect recurrent copy-number loci across samples
 - **permute**: Build or pool the rotate permutation null used for locus scoring
 - **loci_assignment**: Fit cohort-level fitness at predefined locus positions
-- **cohort_model**: Prepare one common cohort model for every detection seed and component fit
 - **components**: Group scored loci across detection seeds, select components and jointly refit all/filtered sets
 - **plotting**: Generate visualizations of inferred events and detected loci
 
@@ -172,6 +169,9 @@ spice loci_detection --config configs/loci_example.yaml
 
 # Loci assignment
 spice loci_assignment --config configs/loci_example.yaml
+
+# Components across independent detection seeds
+spice components --config configs/components_example.yaml
 
 # Plotting
 spice plotting --config <path/to/config> --plot-events-per-sample <SAMPLE_ID>
@@ -293,6 +293,7 @@ SV support in `event_inference` is optional and enabled by setting the config ke
 Results are saved in `results/{name}/`
 
 **Main outputs:**
+
 - `final_events.tsv`: Summary of inferred events per sample/chromosome/allele with event types, coordinates, and validation metrics
 - `events_summary.tsv`: Summary statistics for each ID (sample, chromosome, allele combination), including number of events and path selection method
 
@@ -357,7 +358,10 @@ Loci detection identifies recurrently gained or lost copy-number loci across a c
 
 ### 4.1 Pipeline Overview
 
-Coming soon!
+Prepare chromosome-level signals and kernels from inferred events, detect and
+optimize loci across length scales, then combine chromosomes. Score loci against
+the permutation null, apply the configured filters, and refit the
+retained loci for reporting.
 
 ### 4.2 Expected Input
 
@@ -383,9 +387,6 @@ Loci detection requires:
   filtered events (`lower < width <= upper`, matching detection), with centromere
   coordinates rounded to that scale's segment size. Missing arms use static centromere
   boundaries; an entirely empty scale uses static assembly bounds with a warning.
-  Tables previously generated by pooling scales must also be regenerated.
-  Tables generated previously from raw events must be regenerated, followed by the observed
-  loci fits and all permutation units; cached results from the old boundaries cannot be reused.
 
 For example, add these paths to your `cohort_loci.yaml` (relative paths use `directories.base_dir`):
 
@@ -418,21 +419,17 @@ config and select combine-only or resume stages on the command line. `--overwrit
 also rebuilds an existing null; for large cohorts, build it with scattered `spice permute`
 commands before combining.
 
-After upgrading from earlier `p-explore` results, use a new run name/directory and
-regenerate observed fits and every permutation unit. Previous caches and null tables
-encode the old RNG and rotation behavior; re-pooling those fits does not update them.
-Use matching signed A+B null tables and the current rotation implementation;
-legacy mean-fitness null statistics cannot be used directly.
-
 ### 4.3 Expected Output
 
 Results are saved in `results/{name}`
 
 **Main outputs:**
-- `detected_loci.tsv`: List of detected recurrent loci with coordinates and occurrence statistics
-- `loci_summary.tsv`: Summary statistics for each detected locus
 
-Intermediate files are saved in `results/{name}/events`
+- `final_loci_detection.tsv`: Filtered loci with coordinates, scores and refitted fitness
+- `final_loci_detection_unfiltered.tsv`: All scored candidates, used as component inputs
+- `within_ci_detection.tsv`: Per-chromosome fit coverage within bootstrap bounds
+
+Intermediate models and fits are saved in `results/{name}/loci_of_selection/`
 
 ---
 
@@ -442,7 +439,9 @@ Loci assignment assigns predetermined loci to a cohort. This is recommended for 
 
 ### 5.1 Pipeline Overview
 
-Coming soon!
+Prepare cohort signals from inferred events and optimize fitness at the supplied
+reference locus positions. Combine the chromosome fits into a cohort-level locus
+table.
 
 ### 5.2 Expected Input
 
@@ -455,16 +454,106 @@ Loci assignment requires:
 Results are saved in `results/{name}/`
 
 **Main outputs:**
-- `loci_assignments.tsv`: Assignment of loci to samples with presence/absence or quantitative scores
-- `loci_sample_matrix.tsv`: Binary or weighted matrix of loci (rows) by samples (columns)
+
+- `final_loci_assignment.tsv`: Reference loci with fitted cohort-level fitness and locus statistics
 
 ---
 
-## 6. Plotting
+## 6. Components
+
+Components group recurrent loci across independent detection seeds and estimate
+joint fitness for both the complete and selected component sets.
+
+```bash
+spice components --config configs/components_example.yaml
+```
+
+### 6.1 Pipeline Overview
+
+1. Load scored, unfiltered locus tables from independent detections of the same cohort.
+2. Cluster loci on the same chromosome and in the same direction, allowing one
+   member per seed. Default maximum member-center spans are 1, 2, 4 and 8 Mb
+   for the small, mid1, mid2 and large scales. Each group obeys its tightest
+   member's span limit; scale assignment uses positive same-direction fitness.
+3. Select components by seed support and equal-weight Stouffer combination of
+   member q-values. Defaults require all ten seeds and a score below 0.05.
+4. Prepare fresh kernels, boundary corrections, signals and bootstrap bounds
+   from the cohort events after clustering. No reference detection seed is needed.
+5. Jointly optimize component fitness at fixed positions, separately for the all
+   and filtered sets. All eight fitness tracks can change, including initial
+   zeros; membership, intervals and selection scores remain fixed.
+
+The Stouffer score is a descriptive selection score, not a calibrated component
+p-value or FDR. Component intervals enclose member positional uncertainty; they
+do not measure signal extent. Candidates without positive same-direction fitness
+are excluded from grouping and recorded separately.
+
+### 6.2 Expected Input
+
+Components require:
+
+- **Seed locus tables**: `input_files.component_loci` maps integer seed IDs to
+  `final_loci_detection_unfiltered.tsv` files. The number of tables must equal
+  `components.n_seeds`. Use scored A+B tables from the same cohort and the same
+  permutation null, with all eight signed fitness columns and p/q values.
+- **Cohort inputs**: inferred `input_files.final_events` (an absolute path),
+  cohort-specific observed centromere/telomere tables, matching plateau inputs
+  and static segmentation grids, as described in section 4.2. Use the same
+  assembly and event-preprocessing settings as the individual detections.
+- **Component settings**: seed count, support and score thresholds, clustering
+  spans and fitting budget in the YAML configuration.
+
+The [example configuration](configs/components_example.yaml) supplies the input
+layout. The component defaults are:
+
+```yaml
+components:
+  n_seeds: 10
+  model_seed: 0
+  N_bootstrap: 1000
+  N_kernel: 1000
+  selection:
+    method: stouffer_q
+    min_support: 10
+    threshold: 0.05
+  max_member_spans_mb: {small: 1, mid1: 2, mid2: 4, large: 8}
+  scale_fitness_fraction: 0.25
+  refit_iterations: 100000
+```
+
+`components.model_seed` controls fresh model preparation; `params.seed` or
+`--seed` controls fitness optimization. Omit `input_files.component_model_dir`
+and `input_files.cohort_model_dir` to build the fresh component model. Detection
+seeds run independently before this command; it consumes their completed tables.
+
+### 6.3 Expected Output
+
+Results are saved in `directories.results_dir/<name>/components/`.
+
+**Main outputs:**
+
+- `components_all.tsv` and `components_filtered.tsv`: Separately fitted component
+  catalogs with coordinates, fitness, A and A+B summaries, member/support counts
+  and `stouffer_q_score`. Component p/q fields are empty.
+- `component_members.tsv` and `discarded_loci.tsv`: Seed and row identities for
+  component members and excluded candidates.
+- `component_model/`: Fresh models, bootstrap draws and their manifest.
+- `fits/{all,filtered}/<chrom>/`: Fitted signals and selection-point pickles.
+- `config.yaml` and `audit.json`: Effective settings, input hashes, model identity,
+  fit losses and within-CI fractions, calculated on non-centromere bins using
+  strict bounds and including zero-signal bins.
+
+Use a new name/results directory for each run. `--chrom chr21` restricts the job
+to one chromosome; separate chromosome jobs require distinct output names and
+component IDs must be made unique when merging their catalogs.
+
+---
+
+## 7. Plotting
 
 Plotting generates visualizations of inferred events and detected loci to aid in manual inspection and interpretation of results.
 
-### 6.1 Event Visualization
+### 7.1 Event Visualization
 
 Plotting inferred events can be done on the sample or ID (sample, chromosome, allele) level.
 
@@ -485,7 +574,7 @@ spice plotting --config <path/to/config> --plot-events-per-id <sample:chr:allele
 
 For interactive exploration, see `notebooks/events_plotting.ipynb`.
 
-### 6.2 Loci Visualization
+### 7.2 Loci Visualization
 
 Plotting detected or assigned loci can be done on the chromosome or loci level.
 
@@ -525,7 +614,7 @@ For interactive exploration, see `notebooks/loci_plotting.ipynb`.
 
 ---
 
-## 7. Python API
+## 8. Python API
 
 You can also import and use SPICE functions directly in Python. Note that it is important to run `spice.load_config(config_file)` before any other spice imports
 ```python
@@ -541,46 +630,22 @@ from spice.data_loaders import load_chrom_lengths
 
 See also the example notebooks for how to use the API.
 
-## 8. Known issues
+## 9. Known issues
 
 **SPICE event inference runs for too long / doesn't finish:** This is usually due to the MCMC event inference for large chromosomes (>9 events). Either reduce the paramter `mcmc_n_iterations_scale` which will reduce the total number of iterations to run or set the parameter `time_limit_mcmc` to a time limit (in seconds) which will abort the computation. Note that in the case of `time_limit_mcmc`, no output will be saved.
 
 **Long computation time for single-cell data:** SPICE treats every sample/chromsome pair separately. For single-cell datasets this results in a massive amount of individual calculations. We recommend to first remove duplicate sample/chromosomes and then run SPICE on this reduced dataset.
 
-## 9. Citation
+## 10. Citation
 
 If you use SPICE in your research, please cite the [accompanying BioRxiv preprint](https://www.biorxiv.org/content/10.64898/2026.03.01.708809v1):
 
 > **Deciphering selection patterns of somatic copy-number events** Tom L. Kaufmann, Adam Streck, Florian Markowetz, Peter Van Loo, Roland F. Schwarz. bioRxiv 2026; doi: https://doi.org/10.64898/2026.03.01.708809
 
-## 10. License
+## 11. License
 
 GNU GENERAL PUBLIC LICENSE
 
-## 11. Contact
+## 12. Contact
 
 For questions and issues, please contact tom.kaufmann@iccb-cologne.org or roland.schwarz@iccb-cologne.org.
-
-
-Hybrid permutation uses `end-start` for placement geometry and preserves the
-input `width` separately. Imported event tables may contain different values;
-SPICE uses the stored width for length-scale/kernel modeling, so permutation
-must neither overwrite it nor stretch the original coordinate span to match it.
-
-Hybrid permutation combination validates mode markers for every chromosome cache
-that `combine_loci` will load, including chromosomes absent from the current
-processed event frame. Pooling and inline combination share the same cache
-enumeration as `combine_loci`; incompatible leftovers are rejected before use.
-
-## Components across detection seeds
-
-Run `spice components --config configs/components_example.yaml` to group scored,
-unfiltered seed loci and jointly fit the all-component and filtered-component
-sets. YAML configures seed count, fresh component-model preparation, selection
-method/support/score threshold, clustering spans and optimization budget. See
-[component configuration and outputs](doc/components.md).
-
-For independent detections, the [component command](doc/components.md) now builds
-a fresh event-derived model after clustering; no reference seed is needed.
-The optional [shared cohort model](doc/cohort_model.md) is an earlier experiment
-that also shares preprocessing between detections; it is separate from this workflow.

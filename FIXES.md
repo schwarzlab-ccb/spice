@@ -85,8 +85,7 @@ historical reproduction and controlled comparisons.
 Whole-genome TCGA validation preserved exact membership and all 1289 / selected
 422 component counts, with no zero-fitness components. Selected CI coverage changed
 from 80.282% to 80.408%; on unchanged old bounds it became 80.367%. Native tests:
-240 passed, 4 skipped. See [usage](doc/components.md) and the
-[full validation report](doc/independent_component_model_validation.md).
+240 passed, 4 skipped. See [current component usage](README.md#6-components).
 
 This integrates the command into native SPICE only. The external pipeline's
 workflow and production lock still target their previous implementation and need
