@@ -199,8 +199,6 @@ def solve_with_knn(full_paths, cur_chrom_segments, knn_train_data, k=250, wgd_sp
                    log10_distances=True, save_all_scores=None, ignore_empty_train=False,
                    single_width_bin=True, clip_k=True, perform_loh_checks=False):
 
-    from spice.event_inference.events_from_graph import check_loh_for_full_paths  # lazy: needs ortools/fstlib/medicc
-
     # because of how calc_event_distances works now...
     if hasattr(k, '__iter__'):
         assert len(k) == 1, 'k must be a single integer'
@@ -249,6 +247,7 @@ def solve_with_knn(full_paths, cur_chrom_segments, knn_train_data, k=250, wgd_sp
         path_distances[paths_with_same_gain_loss_event] = np.max(path_distances)
 
     if perform_loh_checks and (0 in full_paths.cn_profile):
+        from spice.event_inference.events_from_graph import check_loh_for_full_paths  # lazy: needs ortools/fstlib/medicc
         log_debug(logger, 'Performing LOH checks')
         best_path_indices = np.argsort(path_distances)
         best_path_index = None
