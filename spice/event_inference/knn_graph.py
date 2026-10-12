@@ -12,7 +12,6 @@ from spice.logging import log_debug
 from spice.utils import (
     CALC_NEW, get_logger, open_pickle, save_pickle, create_full_df_from_diff_df)
 from spice.data_loaders import load_chrom_lengths
-from spice.event_inference.events_from_graph import check_loh_for_full_paths
 
 # Use importlib.resources for accessing package data (works with installed packages)
 if sys.version_info >= (3, 9):
@@ -199,6 +198,8 @@ def calc_event_distances(train_events, test_events, wgd_split=True, block_same_i
 def solve_with_knn(full_paths, cur_chrom_segments, knn_train_data, k=250, wgd_split=True,
                    log10_distances=True, save_all_scores=None, ignore_empty_train=False,
                    single_width_bin=True, clip_k=True, perform_loh_checks=False):
+
+    from spice.event_inference.events_from_graph import check_loh_for_full_paths  # lazy: needs ortools/fstlib/medicc
 
     # because of how calc_event_distances works now...
     if hasattr(k, '__iter__'):

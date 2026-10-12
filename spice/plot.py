@@ -12,9 +12,7 @@ from scipy.stats import linregress, t
 
 from spice import config, data_loaders
 from spice.utils import chrom_id_from_id, get_logger, get_diffs_from_events_df, linkage_order
-from spice.event_inference.events_from_graph import raw_events_from_FullPaths
 from spice.segmentation import create_events_in_segmentation_full
-from spice.event_inference.mcmc_for_large_chroms import _get_events_from_diff
 from spice.event_inference.data_structures import FullPaths
 from spice.length_scales import DEFAULT_SEGMENT_SIZE_DICT, LS_I_DICT, LS_I_DICT_REV
 # from spice.tsg_og.event_rate_per_loci import calc_event_rate_per_loci
@@ -366,6 +364,7 @@ def plot_bipartite_connections(
     '''
     Plot "runes"
     '''
+    from spice.event_inference.events_from_graph import raw_events_from_FullPaths  # lazy: needs ortools/fstlib/medicc
     if len(res) == 0:
         return None
 
@@ -658,6 +657,7 @@ def plot_all_diffs(
     small_event_th=5e6,
     horizontal_lines=False
 ):
+    from spice.event_inference.mcmc_for_large_chroms import _get_events_from_diff  # lazy: needs ortools/fstlib/medicc
     cur_events = events_df.query("id == @cur_id")
     cur_chrom = cur_id.split(":")[1]
     diffs = get_diffs_from_events_df(cur_id, cur_events)
