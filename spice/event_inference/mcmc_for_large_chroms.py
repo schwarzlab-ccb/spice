@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from spice import config
 from spice.utils import (
     open_pickle, save_pickle, chrom_id_from_id, CALC_NEW, create_full_df_from_diff_df,
-    calc_telomere_bound_whole_arm_whole_chrom)
+    calc_telomere_bound_whole_arm_whole_chrom, _get_events_from_diff)
 from spice.logging import log_debug, get_logger
 from spice.random_state import np_rng, py_rng
 from spice.event_inference.knn_graph import calc_event_distances, EventDistData
@@ -1384,14 +1384,3 @@ def _proposal_is_unchanged(event_proposal, best_events, has_wgd):
         return (event_proposal == best_events).all()
 
 
-def _get_events_from_diff(overall_best_diffs, has_wgd):
-    if has_wgd:
-        best_events_pre = _get_events_from_diff(overall_best_diffs[0], has_wgd=False)
-        best_events_post = _get_events_from_diff(overall_best_diffs[1], has_wgd=False)
-        overall_best_events = [best_events_pre, best_events_post]
-    else:
-        overall_best_events = np.stack([
-            np.argmax(np.abs(overall_best_diffs), axis=1),
-            overall_best_diffs.shape[1] - np.argmax(np.abs(overall_best_diffs)[:, ::-1], axis=1)]).T
-        overall_best_events[overall_best_diffs.min(axis=1) == -1] = overall_best_events[overall_best_diffs.min(axis=1) == -1][:, ::-1]
-    return overall_best_events
