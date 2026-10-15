@@ -421,3 +421,16 @@ def timeout(seconds, mode="auto", error=FunctionTimeoutError):
         return wrapper
 
     return decorator
+
+
+def _get_events_from_diff(overall_best_diffs, has_wgd):
+    if has_wgd:
+        best_events_pre = _get_events_from_diff(overall_best_diffs[0], has_wgd=False)
+        best_events_post = _get_events_from_diff(overall_best_diffs[1], has_wgd=False)
+        overall_best_events = [best_events_pre, best_events_post]
+    else:
+        overall_best_events = np.stack([
+            np.argmax(np.abs(overall_best_diffs), axis=1),
+            overall_best_diffs.shape[1] - np.argmax(np.abs(overall_best_diffs)[:, ::-1], axis=1)]).T
+        overall_best_events[overall_best_diffs.min(axis=1) == -1] = overall_best_events[overall_best_diffs.min(axis=1) == -1][:, ::-1]
+    return overall_best_events

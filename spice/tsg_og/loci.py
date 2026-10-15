@@ -105,69 +105,6 @@ def create_loci_df(all_selection_points, all_loci_widths=None, nr_stds_widths=2,
     return loci_df
 
 
-def overlap_with_cosmic_davoli(loci_df, cosmic_loci, davoli_loci):
-    """
-    This function creates a DataFrame that combines information from COSMIC and Davoli loci
-    and determines overlaps with the provided loci DataFrame.
-
-    Args:
-        loci_df (pd.DataFrame): DataFrame containing loci with columns ['chrom', 'start', 'end'].
-        cosmic_loci (pd.DataFrame): DataFrame containing COSMIC loci with columns ['Gene Symbol', 'chrom', 'start', 'end'].
-        davoli_loci (pd.DataFrame): DataFrame containing Davoli loci with columns ['name', 'chrom', 'start', 'end'].
-
-    Returns:
-        pd.DataFrame: Updated loci_df with additional columns:
-            - 'cosmic': Boolean indicating overlap with COSMIC loci.
-            - 'davoli': Boolean indicating overlap with Davoli loci.
-            - 'cosmic_genes': List of overlapping COSMIC genes.
-            - 'davoli_genes': List of overlapping Davoli genes.
-            - 'cosmic_davoli_genes': List of genes overlapping both COSMIC and Davoli.
-            - 'n_cosmic_genes': Number of overlapping COSMIC genes.
-            - 'n_davoli_genes': Number of overlapping Davoli genes.
-    """
-    cosmic_overlaps = calc_overlaps(cosmic_loci, loci_df)
-    davoli_overlaps = calc_overlaps(davoli_loci, loci_df)
-    loci_df['cosmic'] = cosmic_overlaps.any(axis=0)
-    loci_df['davoli'] = davoli_overlaps.any(axis=0)
-
-    loci_df['cosmic_genes'] = [[cosmic_loci['Gene Symbol'].values[y] for y in np.where(x)[0]] for x in cosmic_overlaps.T]
-    loci_df['davoli_genes'] = [[davoli_loci['name'].values[y] for y in np.where(x)[0]] for x in davoli_overlaps.T]
-    loci_df['cosmic_davoli_genes'] = loci_df.apply(lambda x: np.intersect1d(x['cosmic_genes'], x['davoli_genes']).tolist() if x['cosmic'] > 0 and x['davoli'] > 0 else [], axis=1)
-    loci_df['n_cosmic_genes'] = loci_df['cosmic_genes'].map(len)
-    loci_df['n_davoli_genes'] = loci_df['davoli_genes'].map(len)
-
-    assert ((loci_df['n_cosmic_genes'] > 0) == loci_df['cosmic']).all()
-    assert ((loci_df['n_davoli_genes'] > 0) == loci_df['davoli']).all()
-
-    return loci_df
-
-
-def overlap_with_gistic_biscut(loci_df, gistic_loci, biscut_loci):
-    gistic_overlaps = calc_overlaps(gistic_loci, loci_df)
-    biscut_overlaps = calc_overlaps(biscut_loci, loci_df)
-    loci_df['gistic'] = gistic_overlaps.any(axis=0)
-    loci_df['biscut'] = biscut_overlaps.any(axis=0)
-
-    loci_df['gistic_loci'] = [np.where(x)[0] for x in gistic_overlaps.T]
-    loci_df['biscut_loci'] = [np.where(x)[0] for x in biscut_overlaps.T]
-    loci_df['gistic_genes'] = loci_df['gistic_loci'].map(
-        lambda x: sum([[] if isinstance(gistic_loci['genes'].values[y], float) else
-                    gistic_loci['genes'].values[y] for y in x], []))
-    loci_df['biscut_genes'] = loci_df['biscut_loci'].map(
-        lambda x: sum([[] if isinstance(biscut_loci['genes'].values[y], float) else
-                    biscut_loci['genes'].values[y] for y in x], []))
-    loci_df['gistic_biscut_genes'] = loci_df.apply(lambda x: np.intersect1d(x['gistic_genes'], x['biscut_genes']).tolist() if x['gistic'] > 0 and x['biscut'] > 0 else [], axis=1)
-    loci_df['n_gistic_loci'] = loci_df['gistic_loci'].map(len)
-    loci_df['n_biscut_loci'] = loci_df['biscut_loci'].map(len)
-    loci_df['n_gistic_genes'] = loci_df['gistic_genes'].map(len)
-    loci_df['n_biscut_genes'] = loci_df['biscut_genes'].map(len)
-
-    assert loci_df.query('not gistic')['n_gistic_genes'].max() == 0
-    assert loci_df.query('not biscut')['n_biscut_genes'].max() == 0
-
-    return loci_df
-
-
 def calculate_events_per_loci_df(loci_df, all_selection_points=None, final_events_df=None, rates_and_events_per_loci=None):
     """Add `added_events` and its per-(length scale, direction) decomposition.
 
@@ -455,15 +392,16 @@ def prominence_overlap_check(loci_df, data_per_length_scale, threshold, segment_
 
 
 def selection_points_from_loci_df(loci_df, cur_chrom, ls_i):
-    return [SelectionPoints(loci=[x]) for x in loci_df.query('chrom == @cur_chrom')[['pos', f'fit_{ls_i}']].values]
+    fitness_col = 'fitness_{}_{}'.format(*LS_I_DICT_REV[ls_i])
+    return [SelectionPoints(loci=[x]) for x in loci_df.query('chrom == @cur_chrom')[['pos', fitness_col]].values]
 
 
 def full_selection_points_from_loci_df(loci_df):
+    """Wrap a loci_df's own (pos, fitness) pairs into SelectionPoints, per chromosome and length scale."""
     all_sp = {}
     for cur_chrom in CHROMS[:-1]:
-        cur_loci = loci_df.query('chrom == @cur_chrom').sort_values('rank_on_chrom')
-        all_sp[cur_chrom] = [[
-            SelectionPoints(loci=[x]) for x in cur_loci[['pos', f'fit_{ls_i}']].values]
+        all_sp[cur_chrom] = [
+            selection_points_from_loci_df(loci_df.sort_values('rank_on_chrom'), cur_chrom, ls_i)
             for ls_i in range(8)]
     return all_sp
 

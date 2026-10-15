@@ -154,7 +154,6 @@ def run_loci_detection_per_chrom(
         'final_filter_loci',
         'final_limiting',
         'final_loci_widths',
-        # 'one_by_one'
     ]
 
     which_fast = [
@@ -580,20 +579,6 @@ def run_loci_detection_per_chrom(
             n_jobs=-1,
             calc_new_force_new=overwrite,
             calc_new_filename=os.path.join(output_dir, filenames['final_loci_widths']))
-    
-    # # One by one step
-    # if 'one_by_one' in which_steps:
-    #     logger.info(f'Running one_by_one')
-    #     log_debug(logger, f'Output: {output_dir}/{filenames["one_by_one"]}')
-        
-    #     if RESULTS['final_selection_points'] is None:
-    #         RESULTS['final_selection_points'] = _load_stage(output_dir, filenames, 'final_selection_points')
-        
-    #     RESULTS['one_by_one'] = add_loci_one_by_one(
-    #         cur_chrom=chrom,
-    #         raw_selection_points=RESULTS['final_selection_points'],
-    #         data_per_length_scale=data_per_length_scale,
-    #         show_progress=False)
     
     logger.info(f'Done! Loci detection for chrom={cur_chrom}, name={name}')
     

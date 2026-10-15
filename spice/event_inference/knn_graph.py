@@ -12,7 +12,6 @@ from spice.logging import log_debug
 from spice.utils import (
     CALC_NEW, get_logger, open_pickle, save_pickle, create_full_df_from_diff_df)
 from spice.data_loaders import load_chrom_lengths
-from spice.event_inference.events_from_graph import check_loh_for_full_paths
 
 # Use importlib.resources for accessing package data (works with installed packages)
 if sys.version_info >= (3, 9):
@@ -248,6 +247,7 @@ def solve_with_knn(full_paths, cur_chrom_segments, knn_train_data, k=250, wgd_sp
         path_distances[paths_with_same_gain_loss_event] = np.max(path_distances)
 
     if perform_loh_checks and (0 in full_paths.cn_profile):
+        from spice.event_inference.events_from_graph import check_loh_for_full_paths  # lazy: needs ortools/fstlib/medicc
         log_debug(logger, 'Performing LOH checks')
         best_path_indices = np.argsort(path_distances)
         best_path_index = None
